@@ -3,7 +3,8 @@
 Declarative GitOps for Proxmox VE. Point it at a Git repo, and it keeps your
 cluster matching what the repo says. Think ArgoCD, for Proxmox.
 
-> Status: early work in progress. Not affiliated with or endorsed by Proxmox.
+> Status: early work in progress. ISO sync works end to end; VM and container
+> apply is the current focus. Not affiliated with or endorsed by Proxmox.
 
 ## The problem
 
@@ -24,25 +25,47 @@ Git repo (desired state)  ->  proxmops  ->  Proxmox cluster (observed state)
         |________________ reconcile loop ______________|
 ```
 
+## What works today
+
+proxmops is usable now for ISO management and for observing your cluster; guest
+provisioning is being built. Concretely:
+
+- **Single binary, web UI embedded.** No runtime dependencies, no database
+  server — one static binary that serves the dashboard and runs the loop.
+- **Web UI with auth.** First-run setup, login, and sessions. The cluster
+  connection and Git source are configured from the UI and stored encrypted at
+  rest; the encryption key is generated automatically.
+- **Git source.** Clones and pulls a repo (token auth) or reads a local path,
+  and watches a configurable sub-directory.
+- **Manifests.** Multi-document YAML for `VirtualMachine`, `Container`, `Iso`,
+  and `Network`, each validated on load.
+- **Reconcile loop with live status.** An ArgoCD-style overview — an interactive
+  topology graph and a card view — updates over Server-Sent Events on every pass.
+- **ISO sync (applied).** Images are downloaded onto the target storage when
+  missing, with checksum verification. This path is complete.
+- **VM / container (observed).** Guests are diffed for presence: a manifest with
+  no matching guest is planned as a create, an owned guest dropped from the repo
+  as a delete. **Applying those actions and comparing guest specs are not wired
+  yet** — see the roadmap.
+- **`plan` command.** A read-only diff between repo and cluster for CI or a
+  pre-flight check.
+
 ## Core concepts
 
 - **Desired vs observed state.** The repo holds desired state. The Proxmox API
   reports observed state. proxmops computes the difference and closes the gap.
-- **Reconciliation loop.** A daemon watches the repo and the cluster and
-  reconciles on an interval (and, later, on Git webhook).
-- **Ownership by tag.** proxmops only manages resources it owns, marked with a
+- **Ownership by tag.** proxmops only manages guests it owns, marked with a
   `managed-by:proxmops` tag. Anything it did not create is left alone.
 - **Soft prune.** Inside the owned scope, removing a manifest from the repo
-  removes the resource from the cluster. Outside that scope, nothing is ever
-  deleted. Pre-existing, hand-made VMs are never touched.
-- **Adoption.** An existing resource can be brought under management explicitly,
-  by matching its id and letting proxmops tag it. Nothing is adopted silently.
-- **Drift correction.** If someone changes an owned VM by hand, proxmops reports
-  it as out of sync and, in auto-sync mode, restores the desired state.
+  removes the resource. Outside that scope, nothing is ever deleted — pre-existing,
+  hand-made guests are never touched. Prune is opt-in.
+- **Drift correction.** When an owned resource diverges from the repo, proxmops
+  reports it as out of sync and, in auto-sync mode, restores the desired state.
 
 ## Manifests
 
-One file per resource, Kubernetes-style. Four kinds are planned.
+One file per resource, Kubernetes-style. Four kinds are defined; ISO is applied
+today, VM and container are observed, network is schema-only for now.
 
 A QEMU virtual machine:
 
@@ -107,7 +130,7 @@ spec:
     value: 0123abcd...
 ```
 
-A network bridge:
+A network bridge (schema only, not reconciled yet):
 
 ```yaml
 apiVersion: proxmops.dev/v1
@@ -124,38 +147,73 @@ spec:
 
 ## Target repo layout
 
-proxmops reads manifests from a directory tree. The recommended layout groups
-resources by kind, but any nesting under the configured path is scanned
-recursively.
+proxmops reads manifests from a directory tree under the configured path, scanned
+recursively. Group them however you like:
 
 ```
 your-repo/
   proxmox/                 <- the path proxmops watches
     vms/
       web-01.yaml
-      web-02.yaml
     lxc/
       dns-01.yaml
     isos/
       debian-12.yaml
-    networks/
-      vmbr0.yaml
   ...other unrelated content, ignored...
 ```
 
 The watched path is configurable, so proxmops can live inside a monorepo next to
 unrelated files. Everything outside that path is ignored.
 
+## Install
+
+proxmops ships as a single static binary with the web UI embedded. It talks to
+Proxmox over the API, so it can run on a PVE node, in an LXC/VM, or anywhere with
+network access to the cluster.
+
+**One line:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/prop4n/proxmops/main/packaging/install.sh | sh
+```
+
+The script downloads the latest release for your architecture (checksum
+verified), installs the binary to `/usr/local/bin`, sets up a hardened `systemd`
+service, and starts it. On first start the daemon creates its state directory at
+`/var/lib/proxmops` and **generates the secret-encryption key automatically**
+(`proxmops.db.key`, `0600`) — you never create or manage it by hand. Open
+`http://<host>:8080` to finish setup from the UI.
+
+Pin a version with `PROXMOPS_VERSION=v1.2.3`, and remove everything (keeping your
+state) with `... | sh -s -- --uninstall`.
+
+**Docker:**
+
+```sh
+docker run -d -p 8080:8080 \
+  -v proxmops-data:/data \
+  -e PROXMOPS_SERVER_DATABASEPATH=/data/proxmops.db \
+  ghcr.io/prop4n/proxmops:latest
+```
+
+The key is generated next to the database inside the volume, so it survives
+restarts.
+
 ## Configuration
 
-proxmops is configured with a small file describing where the cluster is and
-where the desired state lives.
+The normal path is to configure nothing by hand: start the daemon, open the UI,
+and fill in the cluster connection and Git source under **Settings**. Those are
+stored encrypted in the database and take precedence over any file, so they apply
+without a restart.
+
+A config file (and matching `PROXMOPS_*` environment variables) is still
+supported, useful for pre-seeding or air-gapped setups:
 
 ```yaml
 cluster:
   endpoint: https://pve.example.com:8006/api2/json
   tokenId: proxmops@pve!gitops
-  tokenSecret: ${PROXMOPS_TOKEN}     # read from env
+  tokenSecret: ${PROXMOPS_CLUSTER_TOKENSECRET}   # from env, never inline
   insecureSkipVerify: false
 
 source:
@@ -171,7 +229,19 @@ reconcile:
 ```
 
 Authentication uses a Proxmox API token, so proxmops runs with a scoped,
-revocable identity rather than a root login.
+revocable identity rather than a root login. Secrets (the cluster token, the Git
+token) are read from the environment or a file, never stored inline.
+
+## Web UI
+
+The daemon serves a dashboard to watch what proxmops sees, in the spirit of the
+ArgoCD UI.
+
+- **Overview.** Every managed resource with its sync status, in two views: an
+  interactive topology graph (source → kind → resource, pan/zoom, drift filter)
+  and a grouped card view. Status streams live over SSE.
+- **Settings.** Configure and test the cluster connection and the Git source
+  from the browser; secrets are write-only and never sent back.
 
 ## Architecture
 
@@ -201,68 +271,65 @@ proxmops is a reconciliation engine wrapped in a control loop.
                   v
         +-------------------+       +-------------------+
         |  Control loop     |------>|  Web UI / API     |
-        |  (interval,       |       |  (status, dry-run,|
-        |   status, retries)|       |   PR impact)      |
-        +-------------------+       +-------------------+
+        |  (interval,       |       |  (status over SSE)|
+        |   status)         |       +-------------------+
+        +-------------------+
 ```
-
-- **Loader / Parser** reads the watched path, decodes manifests, validates them.
-- **Proxmox API client** reads live state and applies changes.
-- **Differ / Planner** compares desired and observed state within the owned
-  scope and produces an ordered plan.
-- **Executor** applies the plan, respecting ownership and prune settings.
-- **Control loop** drives all of the above on an interval and tracks sync status.
 
 The engine (loader, differ, executor) has no knowledge of the loop, so the same
 core powers both the daemon and the read-only `plan` command.
-
-## Usage modes
-
-- **Daemon.** Runs continuously, reconciling on the configured interval. This is
-  the primary mode.
-- **plan.** A read-only command that prints the diff between repo and cluster
-  without changing anything. Useful in CI and before enabling auto-sync.
-- **Web UI.** A dashboard served by the daemon for supervising the whole thing.
-
-## Web UI
-
-The daemon serves a web dashboard to watch and understand what proxmops is doing,
-in the spirit of the ArgoCD UI.
-
-- **Overview.** Every managed resource with its sync status: in sync, out of
-  sync, or unmanaged. Filter by node, kind, or tag.
-- **Dry-run preview.** For any resource or the whole cluster, see the plan
-  proxmops would apply (what gets created, changed, or deleted) before anything
-  runs.
-- **PR impact.** Point the UI at a proposed revision or branch to see what
-  merging that pull request would do to the cluster, so review happens against
-  real consequences, not just a YAML diff.
-- **Drift.** When an owned resource is changed by hand, the UI shows the drift
-  and what reconciliation will do about it.
-
-The UI is read-only for viewing state and plans. Applying still follows the
-configured sync policy.
 
 ## Safety
 
 Managing infrastructure declaratively is powerful and therefore dangerous. The
 defaults lean cautious.
 
-- **Ownership isolation.** Only tagged, proxmops-owned resources are ever
-  modified or deleted.
-- **Opt-in prune.** Deletion of resources dropped from the repo is only done when
+- **Ownership isolation.** Only tagged, proxmops-owned guests are ever modified
+  or deleted.
+- **Opt-in prune.** Deletion of resources dropped from the repo happens only when
   prune is enabled.
-- **Dry run.** Every apply can be previewed without side effects.
-- **Explicit adoption.** Existing resources are never taken over silently.
+- **Detect-only default.** With auto-sync off, proxmops reports drift and plans
+  without touching the cluster.
+- **Encrypted secrets.** Cluster and Git tokens are encrypted at rest under a
+  locally held key.
 
 ## Roadmap
 
-- [ ] Phase 1: QEMU VM reconciliation (create, update, drift, prune)
-- [ ] Phase 2: LXC containers
-- [ ] Phase 3: ISOs and templates with checksum verification
-- [ ] Phase 4: networks and storage
-- [ ] Web UI: sync overview, dry-run preview, PR impact preview, drift view
-- Later: Git webhook triggers, health checks, multi-cluster
+Done:
+
+- [x] Git source: clone/pull, token auth, configurable path
+- [x] Manifest schema and loader (VM, container, ISO, network)
+- [x] Reconcile loop, sync status, ArgoCD-style web UI over SSE
+- [x] Auth, encrypted settings from the UI
+- [x] ISO / template sync with checksum verification
+
+Next:
+
+- [ ] VM apply: create / update / delete (current focus)
+- [ ] Container apply
+- [ ] Spec-level drift detection for guests
+- [ ] Network and storage reconciliation
+- [ ] Explicit adoption of existing guests
+- [ ] UI: dry-run preview, PR-impact preview, filters, drift detail
+- [ ] Later: Git webhook triggers, health checks, multi-cluster
+
+## Development
+
+Requires Go and [Bun](https://bun.sh) (for the web UI).
+
+```sh
+# Backend
+go test ./...
+go build ./cmd/proxmops
+
+# Web UI (from web/ui)
+bun install
+bun run build      # emits dist/, embedded by the Go build
+bun run test       # vitest
+```
+
+Releases are cut with GoReleaser (`.goreleaser.yaml`): static linux/darwin
+binaries with the UI embedded, plus the `checksums.txt` the installer verifies.
 
 ## Status
 

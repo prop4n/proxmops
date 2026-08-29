@@ -11,6 +11,11 @@ coverage.*
 proxmops.yaml
 proxmops.local.yaml
 
+# Runtime state and the encryption key for stored secrets
+proxmops.db
+proxmops.db.key
+*.db.key
+
 # Front-end
 /web/ui/node_modules/
 /web/ui/dist/*
