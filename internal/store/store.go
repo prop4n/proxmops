@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	// Registers the cgo-free "sqlite" driver for database/sql.
 	_ "modernc.org/sqlite"
 )
 
