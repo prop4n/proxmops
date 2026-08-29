@@ -26,6 +26,24 @@ export interface Account {
   username: string
 }
 
+export type SyncState = 'Synced' | 'OutOfSync'
+
+export interface ResourceStatus {
+  kind: string
+  name: string
+  node?: string
+  state: SyncState
+  action?: string
+  reason?: string
+}
+
+export interface StatusSnapshot {
+  updatedAt: string
+  inSync: boolean
+  error?: string
+  resources: ResourceStatus[]
+}
+
 export const api = {
   setupStatus: () => request<{ needsSetup: boolean }>('/setup'),
   setup: (token: string, username: string, password: string) =>
@@ -40,4 +58,5 @@ export const api = {
     }),
   logout: () => request<null>('/logout', { method: 'POST' }),
   me: () => request<Account>('/me'),
+  resources: () => request<StatusSnapshot>('/resources'),
 }

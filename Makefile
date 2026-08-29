@@ -18,6 +18,7 @@ ui-install: ## Install front-end dependencies
 	cd $(UI_DIR) && bun install
 
 ui: ## Build the web UI into web/ui/dist (embedded by the binary)
+	rm -rf $(UI_DIR)/dist/assets
 	cd $(UI_DIR) && bun install && bun run build
 
 ui-dev: ## Run the Vite dev server (proxies /api to :8080)

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/prop4n/proxmops/internal/auth"
+	"github.com/prop4n/proxmops/internal/status"
 	"github.com/prop4n/proxmops/internal/store"
 )
 
@@ -35,10 +36,54 @@ func testServer(t *testing.T) (*Server, string) {
 	token := strings.Fields(after)[0]
 
 	srv := &Server{
-		log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		auth: authSvc,
+		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		auth:   authSvc,
+		status: status.NewStore(),
 	}
 	return srv, token
+}
+
+// authenticatedClient completes setup and returns the session cookies.
+func authenticatedClient(t *testing.T, srv *Server, token string) []*http.Cookie {
+	t.Helper()
+	body := `{"token":"` + token + `","username":"admin","password":"pw"}`
+	rec := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup failed: %d", rec.Code)
+	}
+	return rec.Result().Cookies()
+}
+
+func TestResourcesRequiresAuth(t *testing.T) {
+	srv, _ := testServer(t)
+	rec := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/resources", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestResourcesReturnsSnapshot(t *testing.T) {
+	srv, token := testServer(t)
+	srv.status.Set(status.Snapshot{
+		InSync:    false,
+		Resources: []status.Resource{{Kind: "Iso", Name: "debian-12", State: status.StateOutOfSync, Action: "create"}},
+	})
+	cookies := authenticatedClient(t, srv, token)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "debian-12") || !strings.Contains(rec.Body.String(), "OutOfSync") {
+		t.Fatalf("snapshot not returned: %s", rec.Body)
+	}
 }
 
 func TestHealthEndpointPublic(t *testing.T) {

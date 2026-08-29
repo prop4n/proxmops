@@ -12,6 +12,7 @@ import (
 	"github.com/prop4n/proxmops/internal/reconcile"
 	"github.com/prop4n/proxmops/internal/server"
 	"github.com/prop4n/proxmops/internal/source"
+	"github.com/prop4n/proxmops/internal/status"
 	"github.com/prop4n/proxmops/internal/store"
 )
 
@@ -27,7 +28,7 @@ func New(cfg config.Config, log *slog.Logger) *App {
 }
 
 func (a *App) Plan(ctx context.Context) (reconcile.Plan, error) {
-	return a.newEngine().Plan(ctx)
+	return a.newEngine(nil).Plan(ctx)
 }
 
 func (a *App) Run(ctx context.Context, addr string) error {
@@ -42,10 +43,12 @@ func (a *App) Run(ctx context.Context, addr string) error {
 		return fmt.Errorf("init auth: %w", err)
 	}
 
-	engine := a.newEngine()
+	statusStore := status.NewStore()
+	engine := a.newEngine(statusStore)
 	srv := server.New(server.Options{
 		Addr:         addr,
 		Auth:         authSvc,
+		Status:       statusStore,
 		CookieSecure: a.cfg.Server.CookieSecure,
 	}, a.log)
 
@@ -70,7 +73,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 	return runErr
 }
 
-func (a *App) newEngine() *reconcile.Engine {
+func (a *App) newEngine(statusStore *status.Store) *reconcile.Engine {
 	client := proxmox.New(a.cfg.Cluster)
 	src := source.New(a.cfg.Source)
 	reconcilers := []reconcile.Reconciler{
@@ -82,5 +85,5 @@ func (a *App) newEngine() *reconcile.Engine {
 		DryRun:   a.cfg.Reconcile.DryRun,
 		Prune:    a.cfg.Reconcile.Prune,
 	}
-	return reconcile.NewEngine(src, reconcilers, opts, a.log)
+	return reconcile.NewEngine(src, reconcilers, opts, a.log, statusStore)
 }

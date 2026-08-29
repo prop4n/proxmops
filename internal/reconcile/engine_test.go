@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/prop4n/proxmops/internal/manifest"
+	"github.com/prop4n/proxmops/internal/status"
 )
 
 // staticSource returns a fixed desired set.
@@ -39,7 +40,7 @@ func countingAction(t ActionType, applied *int) Action {
 }
 
 func newEngineWith(plan Plan, opts Options) *Engine {
-	return NewEngine(staticSource{}, []Reconciler{staticReconciler{plan}}, opts, testLogger())
+	return NewEngine(staticSource{}, []Reconciler{staticReconciler{plan}}, opts, testLogger(), nil)
 }
 
 func TestEngineAppliesWhenAutoSync(t *testing.T) {
@@ -86,13 +87,39 @@ func TestEngineSkipsDeleteWhenPruneOff(t *testing.T) {
 	}
 }
 
+func TestEngineRecordsStatus(t *testing.T) {
+	// Two desired VMs; the reconciler reports a create for web-01 only.
+	src := staticSource{res: []manifest.Resource{vmResource("web-01"), vmResource("web-02")}}
+	plan := Plan{Actions: []Action{{
+		Type: ActionCreate, Kind: manifest.KindVirtualMachine, Name: "web-01", Reason: "missing",
+		Apply: func(context.Context) error { return nil },
+	}}}
+	st := status.NewStore()
+	eng := NewEngine(src, []Reconciler{staticReconciler{plan}}, Options{AutoSync: false}, testLogger(), st)
+
+	if _, err := eng.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	byName := map[string]status.Resource{}
+	for _, r := range st.Get().Resources {
+		byName[r.Name] = r
+	}
+	if byName["web-01"].State != status.StateOutOfSync {
+		t.Errorf("web-01 = %q, want OutOfSync", byName["web-01"].State)
+	}
+	if byName["web-02"].State != status.StateSynced {
+		t.Errorf("web-02 = %q, want Synced", byName["web-02"].State)
+	}
+}
+
 func TestEngineAnnouncesPlanBeforeApplying(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
 	applied := 0
 	plan := Plan{Actions: []Action{countingAction(ActionCreate, &applied)}}
 	// Detect-only mode: it must still announce the drift and the planned action.
-	eng := NewEngine(staticSource{}, []Reconciler{staticReconciler{plan}}, Options{AutoSync: false}, log)
+	eng := NewEngine(staticSource{}, []Reconciler{staticReconciler{plan}}, Options{AutoSync: false}, log, nil)
 
 	if _, err := eng.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)

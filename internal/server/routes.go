@@ -42,10 +42,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleResources will report managed resources and their sync status. It is a
-// placeholder until the reconciliation status store is wired in.
+// handleResources reports the managed resources and their sync status from the
+// most recent reconciliation pass.
 func (s *Server) handleResources(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, []any{})
+	writeJSON(w, http.StatusOK, s.status.Get())
 }
 
 // requestLogger logs each request through the server's structured logger.

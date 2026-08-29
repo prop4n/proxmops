@@ -4,10 +4,19 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/prop4n/proxmops/internal/manifest"
+	"github.com/prop4n/proxmops/internal/status"
 )
+
+// reportedKinds are the resource kinds surfaced in the sync status.
+var reportedKinds = []manifest.Kind{
+	manifest.KindVirtualMachine,
+	manifest.KindContainer,
+	manifest.KindIso,
+}
 
 // Source supplies the desired state for a reconciliation pass.
 type Source interface {
@@ -31,36 +40,47 @@ type Engine struct {
 	reconcilers []Reconciler
 	opts        Options
 	log         *slog.Logger
+	status      *status.Store
 }
 
-// NewEngine wires an Engine from its collaborators.
-func NewEngine(source Source, reconcilers []Reconciler, opts Options, log *slog.Logger) *Engine {
-	return &Engine{source: source, reconcilers: reconcilers, opts: opts, log: log}
+// NewEngine wires an Engine from its collaborators. status may be nil (e.g. for
+// the read-only plan command).
+func NewEngine(source Source, reconcilers []Reconciler, opts Options, log *slog.Logger, status *status.Store) *Engine {
+	return &Engine{source: source, reconcilers: reconcilers, opts: opts, log: log, status: status}
 }
 
-// Plan computes the combined reconciliation plan without changing anything.
-func (e *Engine) Plan(ctx context.Context) (Plan, error) {
+// computePlan loads the desired state and aggregates every reconciler's plan.
+func (e *Engine) computePlan(ctx context.Context) ([]manifest.Resource, Plan, error) {
 	desired, err := e.source.Desired(ctx)
 	if err != nil {
-		return Plan{}, err
+		return nil, Plan{}, err
 	}
 	var full Plan
 	for _, r := range e.reconcilers {
 		p, err := r.Plan(ctx, desired)
 		if err != nil {
-			return Plan{}, err
+			return nil, Plan{}, err
 		}
 		full.add(p)
 	}
-	return full, nil
+	return desired, full, nil
+}
+
+// Plan computes the combined reconciliation plan without changing anything.
+func (e *Engine) Plan(ctx context.Context) (Plan, error) {
+	_, plan, err := e.computePlan(ctx)
+	return plan, err
 }
 
 // Reconcile computes a plan and, when auto-sync is enabled, applies it once.
 func (e *Engine) Reconcile(ctx context.Context) (Plan, error) {
-	plan, err := e.Plan(ctx)
+	desired, plan, err := e.computePlan(ctx)
 	if err != nil {
+		e.recordError(err)
 		return Plan{}, err
 	}
+	e.recordStatus(desired, plan)
+
 	if plan.Empty() {
 		e.log.Info("cluster in sync")
 		return plan, nil
@@ -75,6 +95,79 @@ func (e *Engine) Reconcile(ctx context.Context) (Plan, error) {
 		return plan, nil
 	}
 	return plan, e.apply(ctx, plan)
+}
+
+// recordStatus builds a status snapshot from the desired state and the plan and
+// stores it. Desired resources with no pending action are Synced; those with an
+// action, and owned orphans scheduled for deletion, are OutOfSync.
+func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
+	if e.status == nil {
+		return
+	}
+
+	type key struct {
+		kind manifest.Kind
+		name string
+	}
+	actions := make(map[key]Action, len(plan.Actions))
+	for _, a := range plan.Actions {
+		actions[key{a.Kind, a.Name}] = a
+	}
+
+	resources := make([]status.Resource, 0, len(desired))
+	seen := make(map[key]bool)
+	for _, r := range desired {
+		kind := r.GetTypeMeta().Kind
+		if !isReported(kind) {
+			continue
+		}
+		om := r.GetObjectMeta()
+		k := key{kind, om.Name}
+		seen[k] = true
+		res := status.Resource{Kind: string(kind), Name: om.Name, Node: om.Node, State: status.StateSynced}
+		if a, ok := actions[k]; ok {
+			res.State = status.StateOutOfSync
+			res.Action = string(a.Type)
+			res.Reason = a.Reason
+		}
+		resources = append(resources, res)
+	}
+	// Owned orphans (deletes) are not in the desired set.
+	for k, a := range actions {
+		if seen[k] || !isReported(k.kind) {
+			continue
+		}
+		resources = append(resources, status.Resource{
+			Kind:   string(k.kind),
+			Name:   k.name,
+			State:  status.StateOutOfSync,
+			Action: string(a.Type),
+			Reason: a.Reason,
+		})
+	}
+
+	e.status.Set(status.Snapshot{
+		UpdatedAt: time.Now(),
+		InSync:    plan.Empty(),
+		Resources: resources,
+	})
+}
+
+// recordError marks the current snapshot as failed while keeping prior results.
+func (e *Engine) recordError(err error) {
+	if e.status == nil {
+		return
+	}
+	snap := e.status.Get()
+	snap.UpdatedAt = time.Now()
+	snap.InSync = false
+	snap.Error = err.Error()
+	e.status.Set(snap)
+}
+
+// isReported reports whether a kind is surfaced in the sync status.
+func isReported(kind manifest.Kind) bool {
+	return slices.Contains(reportedKinds, kind)
 }
 
 // announce logs that the cluster is out of sync and lists every planned action.

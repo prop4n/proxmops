@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prop4n/proxmops/internal/auth"
+	"github.com/prop4n/proxmops/internal/status"
 )
 
 // Server wraps an http.Server with the proxmops routes mounted.
@@ -17,6 +18,7 @@ type Server struct {
 	http         *http.Server
 	log          *slog.Logger
 	auth         *auth.Service
+	status       *status.Store
 	cookieSecure bool
 }
 
@@ -24,6 +26,7 @@ type Server struct {
 type Options struct {
 	Addr         string
 	Auth         *auth.Service
+	Status       *status.Store
 	CookieSecure bool
 }
 
@@ -32,6 +35,7 @@ func New(opts Options, log *slog.Logger) *Server {
 	s := &Server{
 		log:          log,
 		auth:         opts.Auth,
+		status:       opts.Status,
 		cookieSecure: opts.CookieSecure,
 	}
 	s.http = &http.Server{
