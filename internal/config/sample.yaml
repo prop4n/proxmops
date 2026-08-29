@@ -1,0 +1,22 @@
+# proxmops configuration.
+# Copy to proxmops.yaml (or run `proxmops init`) and adjust.
+# Secrets should come from the environment, not this file, for example:
+#   export PROXMOPS_CLUSTER_TOKENSECRET=...
+# Any key can be overridden by a PROXMOPS_ environment variable.
+
+cluster:
+  endpoint: https://pve.example.com:8006/api2/json
+  tokenId: proxmops@pve!gitops
+  tokenSecret: ""            # prefer PROXMOPS_CLUSTER_TOKENSECRET
+  insecureSkipVerify: false
+
+source:
+  repoURL: https://github.com/you/homelab.git
+  path: proxmox
+  revision: main
+
+reconcile:
+  interval: 60s
+  autoSync: true
+  prune: true
+  dryRun: false

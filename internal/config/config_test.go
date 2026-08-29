@@ -1,0 +1,95 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proxmops.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+const validConfig = `
+cluster:
+  endpoint: https://pve:8006/api2/json
+  tokenId: id
+  tokenSecret: secret
+source:
+  repoURL: https://example.com/repo.git
+  path: proxmox
+reconcile:
+  interval: 30s
+  autoSync: true
+`
+
+func TestLoadValid(t *testing.T) {
+	cfg, err := Load(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Reconcile.Interval != 30*time.Second {
+		t.Errorf("interval = %v, want 30s", cfg.Reconcile.Interval)
+	}
+	if !cfg.Reconcile.AutoSync {
+		t.Error("autoSync = false, want true")
+	}
+}
+
+func TestLoadDefaultInterval(t *testing.T) {
+	const noInterval = `
+cluster:
+  endpoint: https://pve:8006/api2/json
+  tokenId: id
+  tokenSecret: secret
+source:
+  repoURL: https://example.com/repo.git
+`
+	cfg, err := Load(writeConfig(t, noInterval))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Reconcile.Interval != time.Minute {
+		t.Errorf("interval = %v, want default 1m", cfg.Reconcile.Interval)
+	}
+}
+
+func TestLoadEnvOverridesFile(t *testing.T) {
+	const noSecret = `
+cluster:
+  endpoint: https://pve:8006/api2/json
+  tokenId: id
+source:
+  repoURL: https://example.com/repo.git
+`
+	t.Setenv("PROXMOPS_CLUSTER_TOKENSECRET", "from-env")
+	cfg, err := Load(writeConfig(t, noSecret))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Cluster.TokenSecret != "from-env" {
+		t.Errorf("tokenSecret = %q, want from-env", cfg.Cluster.TokenSecret)
+	}
+}
+
+func TestLoadMissingEndpoint(t *testing.T) {
+	const noEndpoint = `
+cluster:
+  tokenId: id
+  tokenSecret: secret
+source:
+  repoURL: https://example.com/repo.git
+`
+	_, err := Load(writeConfig(t, noEndpoint))
+	if err == nil || !strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("want endpoint error, got %v", err)
+	}
+}

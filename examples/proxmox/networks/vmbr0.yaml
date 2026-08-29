@@ -1,0 +1,10 @@
+apiVersion: proxmops.dev/v1
+kind: Network
+metadata:
+  name: vmbr0
+  node: pve-node1
+spec:
+  type: bridge
+  ports: [eno1]
+  vlanAware: true
+  cidr: 10.0.0.1/24

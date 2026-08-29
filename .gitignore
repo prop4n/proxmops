@@ -1,0 +1,20 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+
+# Test and coverage output
+*.out
+coverage.*
+
+# Local configuration (may hold secrets)
+proxmops.yaml
+proxmops.local.yaml
+
+# Front-end
+/web/ui/node_modules/
+/web/ui/dist/*
+!/web/ui/dist/index.html
+
+# OS / editor
+.DS_Store
