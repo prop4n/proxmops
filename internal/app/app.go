@@ -90,6 +90,17 @@ func (a *App) Run(ctx context.Context, addr string) error {
 // without restarting the daemon; the file configuration serves as fallback
 // until settings exist.
 func (a *App) reconcileLoop(ctx context.Context, statusStore *status.Store) error {
+	// The dispatcher applies actions in the background and outlives each pass, so
+	// its in-flight registry survives the per-pass engine rebuild. It is created
+	// on the first configured pass, sized by the reconcile concurrency then; a
+	// later change to that limit takes effect on restart.
+	var dispatcher *reconcile.Dispatcher
+	defer func() {
+		if dispatcher != nil {
+			dispatcher.Wait()
+		}
+	}()
+
 	var wasComplete bool
 	var lastCfgErr string
 	for {
@@ -116,8 +127,11 @@ func (a *App) reconcileLoop(ctx context.Context, statusStore *status.Store) erro
 		}
 
 		if complete {
+			if dispatcher == nil {
+				dispatcher = reconcile.NewDispatcher(cfg.Reconcile.Concurrency, a.log)
+			}
 			engine := a.newEngine(cfg, statusStore)
-			if _, err := engine.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if err := engine.Scan(ctx, dispatcher); err != nil && !errors.Is(err, context.Canceled) {
 				a.log.Error("reconcile failed", "err", err)
 			}
 		} else {

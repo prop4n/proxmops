@@ -2,7 +2,6 @@ package reconcile
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -10,6 +9,9 @@ import (
 	"github.com/prop4n/proxmops/internal/manifest"
 	"github.com/prop4n/proxmops/internal/status"
 )
+
+// defaultConcurrency bounds background apply when none is configured.
+const defaultConcurrency = 4
 
 // reportedKinds are the resource kinds surfaced in the sync status.
 var reportedKinds = []manifest.Kind{
@@ -33,8 +35,9 @@ type Options struct {
 	Prune bool
 }
 
-// Engine orchestrates the reconcilers and enforces policy. It is
-// transport-agnostic and reused by both the daemon loop and the plan command.
+// Engine plans reconciliation and reports status. It never applies directly:
+// actions are handed to a Dispatcher so a slow one cannot block the next scan.
+// It is transport-agnostic and reused by both the daemon loop and the plan command.
 type Engine struct {
 	source      Source
 	reconcilers []Reconciler
@@ -72,29 +75,32 @@ func (e *Engine) Plan(ctx context.Context) (Plan, error) {
 	return plan, err
 }
 
-// Reconcile computes a plan and, when auto-sync is enabled, applies it once.
-func (e *Engine) Reconcile(ctx context.Context) (Plan, error) {
+// Scan computes a plan, records the status snapshot, and hands the applicable
+// actions to the dispatcher without waiting for them. Because it never blocks on
+// an action, drift appearing while an earlier action is still running is caught
+// on the very next scan.
+func (e *Engine) Scan(ctx context.Context, d *Dispatcher) error {
 	desired, plan, err := e.computePlan(ctx)
 	if err != nil {
 		e.recordError(err)
-		return Plan{}, err
+		return err
 	}
 	e.recordStatus(desired, plan)
 
-	if plan.Empty() {
-		e.log.Info("cluster in sync")
-		return plan, nil
+	if plan.Empty() || !e.opts.AutoSync {
+		return nil
 	}
-
-	// Announce the drift and the planned actions before touching anything, so
-	// the intent is visible whether or not auto-sync applies it.
-	e.announce(plan)
-
-	if !e.opts.AutoSync {
-		e.log.Info("auto-sync disabled, not applying")
-		return plan, nil
+	for _, a := range plan.Actions {
+		switch {
+		case a.Type == ActionDelete && !e.opts.Prune:
+			// Prune disabled: owned orphans are reported but never deleted.
+		case e.opts.DryRun:
+			e.log.Info("dry-run", "action", a.String(), "reason", a.Reason)
+		default:
+			d.Submit(ctx, a)
+		}
 	}
-	return plan, e.apply(ctx, plan)
+	return nil
 }
 
 // recordStatus builds a status snapshot from the desired state and the plan and
@@ -180,8 +186,6 @@ func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
 }
 
 // recordError marks the current snapshot as failed while keeping prior results.
-// The engine only runs against a complete configuration, so the snapshot stays
-// marked configured.
 func (e *Engine) recordError(err error) {
 	if e.status == nil {
 		return
@@ -197,49 +201,4 @@ func (e *Engine) recordError(err error) {
 // isReported reports whether a kind is surfaced in the sync status.
 func isReported(kind manifest.Kind) bool {
 	return slices.Contains(reportedKinds, kind)
-}
-
-// announce logs that the cluster is out of sync and lists every planned action.
-func (e *Engine) announce(plan Plan) {
-	e.log.Info("out of sync", "actions", len(plan.Actions))
-	for _, a := range plan.Actions {
-		e.log.Info("planned", "action", a.String(), "reason", a.Reason)
-	}
-}
-
-// apply carries out a plan subject to policy. Deletes are skipped unless
-// pruning is enabled, honouring the opt-in prune rule.
-func (e *Engine) apply(ctx context.Context, plan Plan) error {
-	for _, a := range plan.Actions {
-		switch {
-		case a.Type == ActionDelete && !e.opts.Prune:
-			e.log.Info("skipping delete (prune disabled)", "action", a.String())
-		case e.opts.DryRun:
-			e.log.Info("dry-run", "action", a.String(), "reason", a.Reason)
-		default:
-			if err := a.Apply(ctx); err != nil {
-				return fmt.Errorf("apply %s: %w", a, err)
-			}
-			e.log.Info("applied", "action", a.String())
-		}
-	}
-	return nil
-}
-
-// Run reconciles once immediately and then on every tick of interval until ctx
-// is cancelled.
-func (e *Engine) Run(ctx context.Context, interval time.Duration) error {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		if _, err := e.Reconcile(ctx); err != nil {
-			e.log.Error("reconcile failed", "err", err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
 }

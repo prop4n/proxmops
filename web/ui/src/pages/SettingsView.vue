@@ -22,7 +22,7 @@ const form = reactive<SettingsSnapshot>({
   configured: false,
   cluster: { endpoint: '', tokenId: '', tokenSecret: '', tokenSecretSet: false, insecureSkipVerify: false },
   source: { repoURL: '', path: '', revision: 'main', username: '', token: '', tokenSet: false },
-  reconcile: { intervalSeconds: 60, autoSync: true, prune: true, dryRun: false },
+  reconcile: { intervalSeconds: 60, autoSync: true, prune: true, dryRun: false, concurrency: 4 },
 })
 
 function applySnapshot(s: SettingsSnapshot) {
@@ -176,9 +176,15 @@ onMounted(load)
           <CardDescription>How often and how aggressively the cluster is reconciled.</CardDescription>
         </CardHeader>
         <CardContent class="grid gap-4">
-          <div class="grid gap-2 sm:max-w-xs">
-            <Label for="interval">Interval (seconds)</Label>
-            <Input id="interval" v-model.number="form.reconcile.intervalSeconds" type="number" min="1" />
+          <div class="grid gap-4 sm:max-w-md sm:grid-cols-2">
+            <div class="grid gap-2">
+              <Label for="interval">Interval (seconds)</Label>
+              <Input id="interval" v-model.number="form.reconcile.intervalSeconds" type="number" min="1" />
+            </div>
+            <div class="grid gap-2">
+              <Label for="concurrency">Parallel actions</Label>
+              <Input id="concurrency" v-model.number="form.reconcile.concurrency" type="number" min="1" />
+            </div>
           </div>
           <div class="flex flex-wrap gap-6">
             <label class="flex items-center gap-2 text-sm">

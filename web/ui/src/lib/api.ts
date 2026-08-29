@@ -71,6 +71,7 @@ export interface ReconcileSettings {
   autoSync: boolean
   prune: boolean
   dryRun: boolean
+  concurrency: number
 }
 
 export interface SettingsSnapshot {

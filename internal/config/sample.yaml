@@ -34,6 +34,7 @@ reconcile:
   autoSync: true
   prune: true
   dryRun: false
+  concurrency: 4        # how many actions apply in parallel
 
 server:
   databasePath: proxmops.db  # accounts, sessions, and UI-saved settings
