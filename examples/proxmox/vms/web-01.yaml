@@ -1,0 +1,18 @@
+apiVersion: proxmops.dev/v1
+kind: VirtualMachine
+metadata:
+  name: web-01
+  node: pve-node1
+  tags: [prod, web]
+spec:
+  vmid: 101
+  cores: 4
+  memory: 8192
+  disks:
+    - storage: local-lvm
+      size: 40G
+  net:
+    - bridge: vmbr0
+      model: virtio
+  iso: debian-12.iso
+  state: running

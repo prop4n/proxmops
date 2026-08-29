@@ -1,0 +1,11 @@
+apiVersion: proxmops.dev/v1
+kind: Iso
+metadata:
+  name: debian-12
+spec:
+  source: https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-12.iso
+  node: pve-node1
+  storage: local
+  checksum:
+    algo: sha256
+    value: 0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd

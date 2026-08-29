@@ -1,0 +1,28 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+
+# Test and coverage output
+*.out
+coverage.*
+
+# Local configuration (may hold secrets)
+proxmops.yaml
+proxmops.local.yaml
+
+# Runtime state and the encryption key for stored secrets
+proxmops.db
+proxmops.db.key
+*.db.key
+
+# Front-end
+/web/ui/node_modules/
+/web/ui/dist/*
+!/web/ui/dist/.gitkeep
+
+# OS / editor
+.DS_Store
+
+# Local ad-hoc test dir
+/proxmops-test/

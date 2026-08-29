@@ -1,0 +1,41 @@
+# proxmops configuration.
+# Copy to proxmops.yaml (or run `proxmops init`) and adjust.
+#
+# These values are only the bootstrap defaults: the daemon also accepts
+# settings saved from the web UI, which take precedence over this file once
+# saved (server settings below always come from this file).
+#
+# Never put secrets in this file. The token secret is resolved in this order:
+#   1. env  PROXMOPS_CLUSTER_TOKENSECRET
+#   2. file cluster.tokenSecretFile  (a path to a mounted secret; most secure)
+#   3. inline cluster.tokenSecret    (clear text; warned about at startup)
+# Any non-secret key can also be overridden by a PROXMOPS_ environment variable.
+# Secrets saved from the web UI are encrypted at rest with a key kept in
+# server.keyPath (override the key with env PROXMOPS_ENCRYPTION_KEY, base64).
+
+cluster:
+  endpoint: https://pve.example.com:8006/api2/json
+  tokenId: proxmops@pve!gitops
+  tokenSecretFile: ""        # e.g. /run/secrets/proxmox-token
+  insecureSkipVerify: false
+
+source:
+  # A remote URL is cloned over Git; a local path (or "local") is read directly.
+  repoURL: https://github.com/you/homelab.git
+  path: proxmox              # sub-directory watched inside the repo
+  revision: main
+  # Private repos: token via PROXMOPS_GIT_TOKEN or tokenFile (never inline).
+  username: ""              # optional; defaults to "git" for HTTPS token auth
+  tokenFile: ""            # e.g. /run/secrets/git-token
+  cacheDir: ""             # where to keep the clone; defaults under the temp dir
+
+reconcile:
+  interval: 60s
+  autoSync: true
+  prune: true
+  dryRun: false
+
+server:
+  databasePath: proxmops.db  # accounts, sessions, and UI-saved settings
+  keyPath: ""                # encryption key for stored secrets; defaults to <databasePath>.key
+  cookieSecure: false        # set true when serving behind HTTPS

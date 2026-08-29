@@ -1,0 +1,19 @@
+apiVersion: proxmops.dev/v1
+kind: Container
+metadata:
+  name: dns-01
+  node: pve-node1
+  tags: [infra, dns]
+spec:
+  vmid: 201
+  cores: 1
+  memory: 512
+  rootfs:
+    storage: local-lvm
+    size: 8G
+  net:
+    - bridge: vmbr0
+      ip: 10.0.0.53/24
+      gw: 10.0.0.1
+  template: debian-12-standard
+  state: running

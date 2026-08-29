@@ -1,0 +1,43 @@
+version: 2
+
+before:
+  hooks:
+    # Build the web UI so the Go binaries embed it.
+    - bash -c "cd web/ui && bun install --frozen-lockfile && bun run build"
+    - go mod tidy
+
+builds:
+  - id: proxmops
+    main: ./cmd/proxmops
+    binary: proxmops
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/prop4n/proxmops/internal/version.Version={{.Version}}
+      - -X github.com/prop4n/proxmops/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/prop4n/proxmops/internal/version.Date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false
