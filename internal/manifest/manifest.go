@@ -41,6 +41,12 @@ type Resource interface {
 	Validate() error
 }
 
+// VMIDer is implemented by guest kinds that carry a numeric spec.vmid, so
+// callers can surface the identifier without a type switch per kind.
+type VMIDer interface {
+	GetVMID() int
+}
+
 // validateMeta checks the fields shared by all resources.
 func validateMeta(tm TypeMeta, om ObjectMeta) error {
 	if tm.APIVersion != APIVersion {

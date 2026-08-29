@@ -50,3 +50,15 @@ func (st *rootState) loadConfig() error {
 	st.cfg = cfg
 	return nil
 }
+
+// loadConfigDraft reads the config without requiring cluster and source
+// settings, allowing the daemon to start unconfigured and be set up from the
+// web UI.
+func (st *rootState) loadConfigDraft() error {
+	cfg, err := config.LoadDraft(st.configPath)
+	if err != nil {
+		return err
+	}
+	st.cfg = cfg
+	return nil
+}

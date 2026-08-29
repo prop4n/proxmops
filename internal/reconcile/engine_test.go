@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prop4n/proxmops/internal/manifest"
 	"github.com/prop4n/proxmops/internal/status"
@@ -142,5 +143,58 @@ func TestEngineAppliesDeleteWhenPruneOn(t *testing.T) {
 	}
 	if applied != 1 {
 		t.Fatalf("applied = %d, want 1 (prune on)", applied)
+	}
+}
+
+func TestEngineRecordsVMIDAndTransitions(t *testing.T) {
+	src := staticSource{res: []manifest.Resource{func() manifest.VirtualMachine {
+		vm := vmResource("web-01")
+		vm.Spec.VMID = 101
+		return vm
+	}()}}
+
+	// A mutable reconciler so successive passes can change the plan.
+	rec := &staticReconciler{}
+	st := status.NewStore()
+	eng := NewEngine(src, []Reconciler{rec}, Options{AutoSync: false}, testLogger(), st)
+	stateOf := func() status.Resource {
+		return st.Get().Resources[0]
+	}
+
+	// Pass 1: drift (create) — the state is stamped now.
+	rec.plan = Plan{Actions: []Action{{Type: ActionCreate, Kind: manifest.KindVirtualMachine, Name: "web-01"}}}
+	if _, err := eng.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := stateOf()
+	if first.VMID != 101 {
+		t.Errorf("vmid = %d, want 101", first.VMID)
+	}
+	if first.State != status.StateOutOfSync || first.LastTransition.IsZero() {
+		t.Fatalf("pass 1 = %+v, want OutOfSync with a transition timestamp", first)
+	}
+
+	// Pass 2: drift resolved — a new transition timestamp is stamped.
+	time.Sleep(2 * time.Millisecond)
+	rec.plan = Plan{}
+	if _, err := eng.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := stateOf()
+	if second.State != status.StateSynced {
+		t.Fatalf("pass 2 state = %q, want Synced", second.State)
+	}
+	if !second.LastTransition.After(first.LastTransition) {
+		t.Fatalf("transition not re-stamped after state change: %v -> %v", first.LastTransition, second.LastTransition)
+	}
+
+	// Pass 3: still in sync — the timestamp is preserved, not reset.
+	time.Sleep(2 * time.Millisecond)
+	if _, err := eng.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	third := stateOf()
+	if !third.LastTransition.Equal(second.LastTransition) {
+		t.Fatalf("transition reset on unchanged state: %v -> %v", second.LastTransition, third.LastTransition)
 	}
 }

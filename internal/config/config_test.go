@@ -80,6 +80,21 @@ source:
 	}
 }
 
+// A container or unit can point the database at a state dir via the env.
+func TestServerDatabasePathFromEnv(t *testing.T) {
+	t.Setenv("PROXMOPS_SERVER_DATABASEPATH", "/var/lib/proxmops/proxmops.db")
+	cfg, err := LoadDraft(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("LoadDraft: %v", err)
+	}
+	if cfg.Server.DatabasePath != "/var/lib/proxmops/proxmops.db" {
+		t.Errorf("databasePath = %q, want the env value", cfg.Server.DatabasePath)
+	}
+	if cfg.Server.KeyPath != "/var/lib/proxmops/proxmops.db.key" {
+		t.Errorf("keyPath = %q, want derived .key path", cfg.Server.KeyPath)
+	}
+}
+
 func TestLoadMissingEndpoint(t *testing.T) {
 	const noEndpoint = `
 cluster:

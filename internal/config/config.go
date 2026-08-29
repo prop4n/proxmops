@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -12,7 +14,6 @@ import (
 // EnvPrefix is prepended to environment variables bound to config keys.
 const EnvPrefix = "PROXMOPS"
 
-// Environment variables that supply secrets. They are resolved outside Viper so
 // they take precedence over files and are never logged.
 const (
 	envClusterTokenSecret = "PROXMOPS_CLUSTER_TOKENSECRET"
@@ -30,6 +31,10 @@ type Config struct {
 // Server configures the web UI and API.
 type Server struct {
 	DatabasePath string `mapstructure:"databasePath"`
+	// KeyPath is the file holding the symmetric key used to encrypt the
+	// secrets stored in the database. Defaults to the database path with a
+	// ".key" suffix.
+	KeyPath string `mapstructure:"keyPath"`
 	// CookieSecure marks session cookies Secure; enable it when serving behind
 	// HTTPS. Default false so the UI works over plain HTTP in a homelab.
 	CookieSecure bool `mapstructure:"cookieSecure"`
@@ -74,8 +79,19 @@ type Reconcile struct {
 }
 
 // Load reads the config file at path, overlays PROXMOPS_ environment variables,
-// and validates the result.
+// resolves secrets, and validates the result.
 func Load(path string) (Config, error) {
+	return load(path, true)
+}
+
+// LoadDraft reads the config file without requiring cluster and source
+// settings: the daemon may start unconfigured and be set up later from the web
+// UI. A missing file is tolerated, yielding pure defaults plus environment.
+func LoadDraft(path string) (Config, error) {
+	return load(path, false)
+}
+
+func load(path string, validate bool) (Config, error) {
 	v := viper.New()
 	setDefaults(v)
 
@@ -86,18 +102,27 @@ func Load(path string) (Config, error) {
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
-		return Config{}, fmt.Errorf("read config: %w", err)
+		// The daemon can run with defaults alone and be configured from the
+		// web UI afterwards.
+		if validate || !errors.Is(err, os.ErrNotExist) {
+			return Config{}, fmt.Errorf("read config: %w", err)
+		}
 	}
 
 	cfg, err := unmarshal(v)
 	if err != nil {
 		return Config{}, err
 	}
+	if cfg.Server.KeyPath == "" {
+		cfg.Server.KeyPath = cfg.Server.DatabasePath + ".key"
+	}
 	if err := cfg.resolveSecrets(); err != nil {
 		return Config{}, err
 	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
+	if validate {
+		if err := cfg.Validate(); err != nil {
+			return Config{}, err
+		}
 	}
 	return cfg, nil
 }
@@ -163,6 +188,9 @@ var envBoundKeys = []string{
 	"reconcile.autoSync",
 	"reconcile.prune",
 	"reconcile.dryRun",
+	"server.databasePath",
+	"server.keyPath",
+	"server.cookieSecure",
 }
 
 // Validate reports whether the configuration is usable.
@@ -180,4 +208,13 @@ func (c Config) Validate() error {
 		return fmt.Errorf("reconcile.interval must be positive")
 	}
 	return nil
+}
+
+// Complete reports whether the configuration holds everything needed to reach
+// the cluster and the desired state, ignoring policy settings.
+func (c Config) Complete() bool {
+	return c.Cluster.Endpoint != "" &&
+		c.Cluster.TokenID != "" &&
+		c.Cluster.TokenSecret != "" &&
+		c.Source.RepoURL != ""
 }

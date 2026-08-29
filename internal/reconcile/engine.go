@@ -99,7 +99,9 @@ func (e *Engine) Reconcile(ctx context.Context) (Plan, error) {
 
 // recordStatus builds a status snapshot from the desired state and the plan and
 // stores it. Desired resources with no pending action are Synced; those with an
-// action, and owned orphans scheduled for deletion, are OutOfSync.
+// action, and owned orphans scheduled for deletion, are OutOfSync. State
+// transition timestamps are preserved across passes so the UI can show how
+// long a resource has been in its current state.
 func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
 	if e.status == nil {
 		return
@@ -109,6 +111,23 @@ func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
 		kind manifest.Kind
 		name string
 	}
+	lastTransition := make(map[key]time.Time)
+	prevState := make(map[key]status.State)
+	for _, prev := range e.status.Get().Resources {
+		k := key{manifest.Kind(prev.Kind), prev.Name}
+		lastTransition[k] = prev.LastTransition
+		prevState[k] = prev.State
+	}
+
+	// transition stamps now, or keeps the previous stamp when the state is
+	// unchanged.
+	transition := func(k key, state status.State) time.Time {
+		if prevState[k] == state && !lastTransition[k].IsZero() {
+			return lastTransition[k]
+		}
+		return time.Now()
+	}
+
 	actions := make(map[key]Action, len(plan.Actions))
 	for _, a := range plan.Actions {
 		actions[key{a.Kind, a.Name}] = a
@@ -125,11 +144,15 @@ func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
 		k := key{kind, om.Name}
 		seen[k] = true
 		res := status.Resource{Kind: string(kind), Name: om.Name, Node: om.Node, State: status.StateSynced}
+		if ider, ok := r.(manifest.VMIDer); ok {
+			res.VMID = ider.GetVMID()
+		}
 		if a, ok := actions[k]; ok {
 			res.State = status.StateOutOfSync
 			res.Action = string(a.Type)
 			res.Reason = a.Reason
 		}
+		res.LastTransition = transition(k, res.State)
 		resources = append(resources, res)
 	}
 	// Owned orphans (deletes) are not in the desired set.
@@ -137,23 +160,28 @@ func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
 		if seen[k] || !isReported(k.kind) {
 			continue
 		}
-		resources = append(resources, status.Resource{
+		res := status.Resource{
 			Kind:   string(k.kind),
 			Name:   k.name,
 			State:  status.StateOutOfSync,
 			Action: string(a.Type),
 			Reason: a.Reason,
-		})
+		}
+		res.LastTransition = transition(k, res.State)
+		resources = append(resources, res)
 	}
 
 	e.status.Set(status.Snapshot{
-		UpdatedAt: time.Now(),
-		InSync:    plan.Empty(),
-		Resources: resources,
+		UpdatedAt:  time.Now(),
+		InSync:     plan.Empty(),
+		Configured: true,
+		Resources:  resources,
 	})
 }
 
 // recordError marks the current snapshot as failed while keeping prior results.
+// The engine only runs against a complete configuration, so the snapshot stays
+// marked configured.
 func (e *Engine) recordError(err error) {
 	if e.status == nil {
 		return
@@ -161,6 +189,7 @@ func (e *Engine) recordError(err error) {
 	snap := e.status.Get()
 	snap.UpdatedAt = time.Now()
 	snap.InSync = false
+	snap.Configured = true
 	snap.Error = err.Error()
 	e.status.Set(snap)
 }

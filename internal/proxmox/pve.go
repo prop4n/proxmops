@@ -40,6 +40,15 @@ func New(cluster config.Cluster) *PVE {
 	return &PVE{api: pve.NewClient(cluster.Endpoint, opts...)}
 }
 
+// Ping verifies the endpoint is reachable and the API token works by fetching
+// the cluster version. It backs the web UI connection test.
+func (c *PVE) Ping(ctx context.Context) error {
+	if _, err := c.api.Version(ctx); err != nil {
+		return fmt.Errorf("get version: %w", err)
+	}
+	return nil
+}
+
 // ListGuests reports the QEMU guests and LXC containers visible in the cluster.
 func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 	cluster, err := c.api.Cluster(ctx)

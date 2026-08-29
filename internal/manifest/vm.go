@@ -9,6 +9,9 @@ type VirtualMachine struct {
 	Spec     VirtualMachineSpec `yaml:"spec"`
 }
 
+// GetVMID implements VMIDer.
+func (vm VirtualMachine) GetVMID() int { return vm.Spec.VMID }
+
 // VirtualMachineSpec describes the configuration of a QEMU guest.
 type VirtualMachineSpec struct {
 	VMID   int        `yaml:"vmid"`

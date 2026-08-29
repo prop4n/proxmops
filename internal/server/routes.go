@@ -30,6 +30,10 @@ func (s *Server) routes() http.Handler {
 			r.Use(s.requireAuth)
 			r.Get("/me", s.handleMe)
 			r.Get("/resources", s.handleResources)
+			r.Get("/events", s.handleEvents)
+			r.Get("/settings", s.handleGetSettings)
+			r.Put("/settings", s.handlePutSettings)
+			r.Post("/settings/test", s.handleTestSettings)
 		})
 	})
 

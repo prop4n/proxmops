@@ -9,6 +9,9 @@ type Container struct {
 	Spec     ContainerSpec `yaml:"spec"`
 }
 
+// GetVMID implements VMIDer.
+func (c Container) GetVMID() int { return c.Spec.VMID }
+
 // ContainerSpec describes the configuration of an LXC container.
 type ContainerSpec struct {
 	VMID     int        `yaml:"vmid"`

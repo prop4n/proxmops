@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS sessions (
 	account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 	expires_at DATETIME NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+	id         INTEGER PRIMARY KEY CHECK (id = 1),
+	data       BLOB NOT NULL,
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 // Store is a handle to the application database.
@@ -38,12 +44,18 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	// SQLite tolerates a single writer; keep one connection to avoid "database
-	// is locked" under the daemon's concurrent handlers.
+	// One connection avoids "database is locked" under concurrent handlers.
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	// WAL and busy_timeout ease contention; foreign_keys enables the cascade.
+	for _, pragma := range []string{
+		"PRAGMA journal_mode = WAL;",
+		"PRAGMA busy_timeout = 5000;",
+		"PRAGMA foreign_keys = ON;",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("apply %q: %w", pragma, err)
+		}
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()

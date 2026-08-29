@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prop4n/proxmops/internal/auth"
+	"github.com/prop4n/proxmops/internal/settings"
 	"github.com/prop4n/proxmops/internal/status"
 )
 
@@ -19,6 +20,7 @@ type Server struct {
 	log          *slog.Logger
 	auth         *auth.Service
 	status       *status.Store
+	settings     *settings.Service
 	cookieSecure bool
 }
 
@@ -27,6 +29,7 @@ type Options struct {
 	Addr         string
 	Auth         *auth.Service
 	Status       *status.Store
+	Settings     *settings.Service
 	CookieSecure bool
 }
 
@@ -36,6 +39,7 @@ func New(opts Options, log *slog.Logger) *Server {
 		log:          log,
 		auth:         opts.Auth,
 		status:       opts.Status,
+		settings:     opts.Settings,
 		cookieSecure: opts.CookieSecure,
 	}
 	s.http = &http.Server{

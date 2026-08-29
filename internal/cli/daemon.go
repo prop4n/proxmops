@@ -12,7 +12,7 @@ func newDaemonCmd(st *rootState) *cobra.Command {
 		Short: "Run the reconciliation loop and web UI",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := st.loadConfig(); err != nil {
+			if err := st.loadConfigDraft(); err != nil {
 				return err
 			}
 			return app.New(st.cfg, st.log).Run(cmd.Context(), addr)
