@@ -56,12 +56,16 @@ func (a *App) Run(ctx context.Context, addr string) error {
 func (a *App) newEngine() *reconcile.Engine {
 	client := proxmox.New(a.cfg.Cluster)
 	src := &dirSource{root: a.cfg.Source.Path}
-	opts := reconcile.ExecuteOptions{
+	reconcilers := []reconcile.Reconciler{
+		reconcile.NewGuestReconciler(client),
+		reconcile.NewIsoReconciler(client),
+	}
+	opts := reconcile.Options{
 		AutoSync: a.cfg.Reconcile.AutoSync,
 		DryRun:   a.cfg.Reconcile.DryRun,
 		Prune:    a.cfg.Reconcile.Prune,
 	}
-	return reconcile.NewEngine(src, client, opts, a.log)
+	return reconcile.NewEngine(src, reconcilers, opts, a.log)
 }
 
 type dirSource struct {

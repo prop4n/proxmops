@@ -1,6 +1,7 @@
 // Package proxmox is the client for the Proxmox VE API. It defines the
-// interface the reconciliation engine depends on, the data types that represent
-// observed cluster state, and an adapter over github.com/luthermonson/go-proxmox.
+// capability interfaces the reconcilers depend on, the data types that
+// represent observed cluster state, and an adapter over
+// github.com/luthermonson/go-proxmox.
 package proxmox
 
 import (
@@ -12,7 +13,7 @@ import (
 // ErrNotImplemented is returned by operations that are not built yet.
 var ErrNotImplemented = errors.New("proxmox: not implemented")
 
-// ManagedTag marks the resources proxmops owns. Only tagged resources are ever
+// ManagedTag marks the guests proxmops owns. Only tagged guests are ever
 // modified or deleted.
 const ManagedTag = "managed-by:proxmops"
 
@@ -29,15 +30,13 @@ const (
 	KindNetwork        Kind = "Network"
 )
 
-// Object is the observed state of a single cluster resource.
+// Object is the observed state of a guest (VM or container).
 type Object struct {
 	Kind Kind
 	Name string
 	Node string
 	ID   string
 	Tags []string
-	// Spec holds kind-specific observed fields used for diffing.
-	Spec map[string]any
 }
 
 // Owned reports whether the object carries the proxmops ownership tag.
@@ -45,13 +44,32 @@ func (o Object) Owned() bool {
 	return slices.Contains(o.Tags, ManagedTag)
 }
 
-// Client reads and mutates Proxmox cluster state. Implementations must be safe
-// for concurrent use.
-type Client interface {
-	// List returns the observed state of every resource proxmops can see.
-	List(ctx context.Context) ([]Object, error)
-	// Apply creates or updates a resource to match the desired object.
-	Apply(ctx context.Context, obj Object) error
-	// Delete removes a resource that proxmops owns.
-	Delete(ctx context.Context, obj Object) error
+// GuestStore reads and mutates QEMU guests and LXC containers. Ownership is
+// tracked with ManagedTag, so untagged guests are never mutated.
+type GuestStore interface {
+	// ListGuests returns every VM and container visible in the cluster.
+	ListGuests(ctx context.Context) ([]Object, error)
+	// CreateGuest provisions a guest to match obj.
+	CreateGuest(ctx context.Context, obj Object) error
+	// DeleteGuest removes a guest proxmops owns.
+	DeleteGuest(ctx context.Context, obj Object) error
+}
+
+// IsoDownload describes an ISO to fetch onto a storage.
+type IsoDownload struct {
+	Node         string
+	Storage      string
+	Filename     string
+	URL          string
+	Checksum     string
+	ChecksumAlgo string
+}
+
+// IsoStore reads and downloads ISO images. ISOs carry no ownership tag, so this
+// store never deletes: reconciliation is download-if-absent only.
+type IsoStore interface {
+	// ListISOs returns the filenames of the ISOs present on node/storage.
+	ListISOs(ctx context.Context, node, storage string) ([]string, error)
+	// DownloadISO fetches an ISO onto a storage, verifying its checksum.
+	DownloadISO(ctx context.Context, req IsoDownload) error
 }
