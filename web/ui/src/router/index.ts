@@ -4,7 +4,15 @@ import { useAuth } from '@/stores/auth'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', name: 'dashboard', component: () => import('@/pages/DashboardView.vue'), meta: { requiresAuth: true } },
+    {
+      // The authenticated app lives inside the shell (sidebar + heartbeat).
+      path: '/',
+      component: () => import('@/components/layout/AppShell.vue'),
+      children: [
+        { path: '', name: 'dashboard', component: () => import('@/pages/DashboardView.vue'), meta: { requiresAuth: true } },
+        { path: 'settings', name: 'settings', component: () => import('@/pages/SettingsView.vue'), meta: { requiresAuth: true } },
+      ],
+    },
     { path: '/login', name: 'login', component: () => import('@/pages/LoginView.vue') },
     { path: '/setup', name: 'setup', component: () => import('@/pages/SetupView.vue') },
   ],

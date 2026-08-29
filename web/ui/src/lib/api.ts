@@ -32,16 +32,63 @@ export interface ResourceStatus {
   kind: string
   name: string
   node?: string
+  vmid?: number
   state: SyncState
   action?: string
   reason?: string
+  /** When the resource entered its current state. */
+  lastTransition?: string
 }
 
 export interface StatusSnapshot {
   updatedAt: string
   inSync: boolean
+  /** False when the daemon has no target yet; the UI must show the setup path. */
+  configured: boolean
   error?: string
   resources: ResourceStatus[]
+}
+
+export interface ClusterSettings {
+  endpoint: string
+  tokenId: string
+  tokenSecret: string
+  tokenSecretSet: boolean
+  insecureSkipVerify: boolean
+}
+
+export interface SourceSettings {
+  repoURL: string
+  path: string
+  revision: string
+  username: string
+  token: string
+  tokenSet: boolean
+}
+
+export interface ReconcileSettings {
+  intervalSeconds: number
+  autoSync: boolean
+  prune: boolean
+  dryRun: boolean
+}
+
+export interface SettingsSnapshot {
+  configured: boolean
+  cluster: ClusterSettings
+  source: SourceSettings
+  reconcile: ReconcileSettings
+  updatedAt?: string
+}
+
+export interface SettingsTestProbe {
+  ok: boolean
+  error?: string
+}
+
+export interface SettingsTestResult {
+  cluster: SettingsTestProbe
+  source: SettingsTestProbe
 }
 
 export const api = {
@@ -59,4 +106,11 @@ export const api = {
   logout: () => request<null>('/logout', { method: 'POST' }),
   me: () => request<Account>('/me'),
   resources: () => request<StatusSnapshot>('/resources'),
+  getSettings: () => request<SettingsSnapshot>('/settings'),
+  saveSettings: (settings: SettingsSnapshot) =>
+    request<SettingsSnapshot>('/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+  testSettings: () => request<SettingsTestResult>('/settings/test', { method: 'POST', body: '{}' }),
 }
