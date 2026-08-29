@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from '@/components/ui/card'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAuth } from '@/stores/auth'
 
 const router = useRouter()
@@ -26,6 +27,7 @@ async function onLogout() {
           </span>
         </div>
         <div class="flex items-center gap-3">
+          <ThemeToggle />
           <span class="text-sm text-muted-foreground">{{ state.user?.username }}</span>
           <Button variant="outline" size="sm" @click="onLogout">Sign out</Button>
         </div>

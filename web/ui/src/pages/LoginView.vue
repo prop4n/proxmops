@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import {
   Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle,
 } from '@/components/ui/card'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAuth } from '@/stores/auth'
 import type { ApiError } from '@/lib/api'
 
@@ -33,7 +34,10 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-background p-4">
+  <div class="relative flex min-h-screen items-center justify-center bg-background p-4">
+    <div class="absolute right-4 top-4">
+      <ThemeToggle />
+    </div>
     <Card class="w-full max-w-sm">
       <CardHeader>
         <CardTitle>Sign in</CardTitle>
