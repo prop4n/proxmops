@@ -14,9 +14,14 @@ cluster:
   insecureSkipVerify: false
 
 source:
+  # A remote URL is cloned over Git; a local path (or "local") is read directly.
   repoURL: https://github.com/you/homelab.git
-  path: proxmox
+  path: proxmox              # sub-directory watched inside the repo
   revision: main
+  # Private repos: token via PROXMOPS_GIT_TOKEN or tokenFile (never inline).
+  username: ""              # optional; defaults to "git" for HTTPS token auth
+  tokenFile: ""            # e.g. /run/secrets/git-token
+  cacheDir: ""             # where to keep the clone; defaults under the temp dir
 
 reconcile:
   interval: 60s

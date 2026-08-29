@@ -3,14 +3,13 @@ package app
 import (
 	"context"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/prop4n/proxmops/internal/config"
-	"github.com/prop4n/proxmops/internal/manifest"
 	"github.com/prop4n/proxmops/internal/proxmox"
 	"github.com/prop4n/proxmops/internal/reconcile"
 	"github.com/prop4n/proxmops/internal/server"
+	"github.com/prop4n/proxmops/internal/source"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -55,7 +54,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 
 func (a *App) newEngine() *reconcile.Engine {
 	client := proxmox.New(a.cfg.Cluster)
-	src := &dirSource{root: a.cfg.Source.Path}
+	src := source.New(a.cfg.Source)
 	reconcilers := []reconcile.Reconciler{
 		reconcile.NewGuestReconciler(client),
 		reconcile.NewIsoReconciler(client),
@@ -66,16 +65,4 @@ func (a *App) newEngine() *reconcile.Engine {
 		Prune:    a.cfg.Reconcile.Prune,
 	}
 	return reconcile.NewEngine(src, reconcilers, opts, a.log)
-}
-
-type dirSource struct {
-	root string
-}
-
-func (s *dirSource) Desired(context.Context) ([]manifest.Resource, error) {
-	root := s.root
-	if root == "" {
-		root = "."
-	}
-	return manifest.Load(os.DirFS(root), ".")
 }

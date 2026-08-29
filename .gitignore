@@ -18,3 +18,6 @@ proxmops.local.yaml
 
 # OS / editor
 .DS_Store
+
+# Local ad-hoc test dir
+/proxmops-test/

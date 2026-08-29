@@ -12,10 +12,12 @@ import (
 // EnvPrefix is prepended to environment variables bound to config keys.
 const EnvPrefix = "PROXMOPS"
 
-// envClusterTokenSecret is the environment variable that supplies the Proxmox
-// API token secret. It is resolved outside Viper so it can take precedence over
-// a file or inline value and never be logged.
-const envClusterTokenSecret = "PROXMOPS_CLUSTER_TOKENSECRET"
+// Environment variables that supply secrets. They are resolved outside Viper so
+// they take precedence over files and are never logged.
+const (
+	envClusterTokenSecret = "PROXMOPS_CLUSTER_TOKENSECRET"
+	envGitToken           = "PROXMOPS_GIT_TOKEN"
+)
 
 // Config is the top-level runtime configuration.
 type Config struct {
@@ -38,10 +40,20 @@ type Cluster struct {
 }
 
 // Source describes where the desired state lives.
+//
+// A remote repoURL (with a scheme, or git@host:...) is cloned over Git; any
+// other value (a local path, or "local") is read from the local filesystem.
+// The Git token, like the cluster secret, is never stored inline: it comes from
+// PROXMOPS_GIT_TOKEN or TokenFile.
 type Source struct {
-	RepoURL  string `mapstructure:"repoURL"`
-	Path     string `mapstructure:"path"`
-	Revision string `mapstructure:"revision"`
+	RepoURL   string `mapstructure:"repoURL"`
+	Path      string `mapstructure:"path"`
+	Revision  string `mapstructure:"revision"`
+	Username  string `mapstructure:"username"`
+	TokenFile string `mapstructure:"tokenFile"`
+	CacheDir  string `mapstructure:"cacheDir"`
+	// Token is the resolved Git credential; it is never read from the file.
+	Token string `mapstructure:"-"`
 }
 
 // Reconcile controls reconciliation behaviour.
@@ -94,6 +106,13 @@ func (c *Config) resolveSecrets() error {
 			"key", "cluster.tokenSecret")
 	}
 	c.Cluster.TokenSecret = secret
+
+	// Git token: env or file only, never inline.
+	token, _, err := resolveSecret(envGitToken, c.Source.TokenFile, "")
+	if err != nil {
+		return err
+	}
+	c.Source.Token = token
 	return nil
 }
 
