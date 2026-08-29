@@ -65,11 +65,24 @@ func (e *Engine) Reconcile(ctx context.Context) (Plan, error) {
 		e.log.Info("cluster in sync")
 		return plan, nil
 	}
+
+	// Announce the drift and the planned actions before touching anything, so
+	// the intent is visible whether or not auto-sync applies it.
+	e.announce(plan)
+
 	if !e.opts.AutoSync {
-		e.log.Info("out of sync (auto-sync disabled)", "actions", len(plan.Actions))
+		e.log.Info("auto-sync disabled, not applying")
 		return plan, nil
 	}
 	return plan, e.apply(ctx, plan)
+}
+
+// announce logs that the cluster is out of sync and lists every planned action.
+func (e *Engine) announce(plan Plan) {
+	e.log.Info("out of sync", "actions", len(plan.Actions))
+	for _, a := range plan.Actions {
+		e.log.Info("planned", "action", a.String(), "reason", a.Reason)
+	}
 }
 
 // apply carries out a plan subject to policy. Deletes are skipped unless

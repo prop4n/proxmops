@@ -1,9 +1,11 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/prop4n/proxmops/internal/manifest"
@@ -81,6 +83,27 @@ func TestEngineSkipsDeleteWhenPruneOff(t *testing.T) {
 	}
 	if applied != 0 {
 		t.Fatalf("applied = %d, want 0 (prune off)", applied)
+	}
+}
+
+func TestEngineAnnouncesPlanBeforeApplying(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	applied := 0
+	plan := Plan{Actions: []Action{countingAction(ActionCreate, &applied)}}
+	// Detect-only mode: it must still announce the drift and the planned action.
+	eng := NewEngine(staticSource{}, []Reconciler{staticReconciler{plan}}, Options{AutoSync: false}, log)
+
+	if _, err := eng.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "out of sync") {
+		t.Errorf("missing drift announcement in log:\n%s", out)
+	}
+	if !strings.Contains(out, "planned") || !strings.Contains(out, "create VirtualMachine/x") {
+		t.Errorf("missing planned action in log:\n%s", out)
 	}
 }
 
