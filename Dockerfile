@@ -1,6 +1,14 @@
 # syntax=docker/dockerfile:1
 
-# Build a static binary.
+# Build the web UI.
+FROM oven/bun:1 AS ui
+WORKDIR /ui
+COPY web/ui/package.json web/ui/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY web/ui/ ./
+RUN bun run build
+
+# Build a static binary with the UI embedded.
 FROM golang:1.26 AS build
 WORKDIR /src
 
@@ -8,6 +16,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+COPY --from=ui /ui/dist ./web/ui/dist
 ARG VERSION=dev
 ARG COMMIT=none
 ARG DATE=unknown

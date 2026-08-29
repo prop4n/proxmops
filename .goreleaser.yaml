@@ -2,6 +2,8 @@ version: 2
 
 before:
   hooks:
+    # Build the web UI so the Go binaries embed it.
+    - bash -c "cd web/ui && bun install --frozen-lockfile && bun run build"
     - go mod tidy
 
 builds:
@@ -28,16 +30,6 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
-
-dockers:
-  - image_templates:
-      - "ghcr.io/prop4n/proxmops:{{ .Version }}"
-      - "ghcr.io/prop4n/proxmops:latest"
-    dockerfile: Dockerfile
-    build_flag_templates:
-      - "--build-arg=VERSION={{ .Version }}"
-      - "--build-arg=COMMIT={{ .ShortCommit }}"
-      - "--build-arg=DATE={{ .Date }}"
 
 changelog:
   sort: asc

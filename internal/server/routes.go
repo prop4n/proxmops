@@ -33,7 +33,7 @@ func (s *Server) routes() http.Handler {
 		})
 	})
 
-	r.Handle("/*", http.FileServerFS(web.Assets()))
+	r.Handle("/*", spaHandler(web.Assets()))
 	return r
 }
 

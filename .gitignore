@@ -14,7 +14,7 @@ proxmops.local.yaml
 # Front-end
 /web/ui/node_modules/
 /web/ui/dist/*
-!/web/ui/dist/index.html
+!/web/ui/dist/.gitkeep
 
 # OS / editor
 .DS_Store

@@ -37,3 +37,13 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install and build UI
+        run: cd web/ui && bun install --frozen-lockfile && bun run build

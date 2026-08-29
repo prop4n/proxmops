@@ -10,9 +10,23 @@ LDFLAGS := -X $(MODULE)/internal/version.Version=$(VERSION) \
            -X $(MODULE)/internal/version.Commit=$(COMMIT) \
            -X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: build test vet lint fmt tidy run docker snapshot clean
+UI_DIR := web/ui
 
-build: ## Build the binary into bin/
+.PHONY: build ui ui-install ui-dev test vet lint fmt tidy run docker snapshot clean
+
+ui-install: ## Install front-end dependencies
+	cd $(UI_DIR) && bun install
+
+ui: ## Build the web UI into web/ui/dist (embedded by the binary)
+	cd $(UI_DIR) && bun install && bun run build
+
+ui-dev: ## Run the Vite dev server (proxies /api to :8080)
+	cd $(UI_DIR) && bun run dev
+
+build: ui ## Build the UI then the binary into bin/
+	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/proxmops
+
+build-go: ## Build only the Go binary (assumes web/ui/dist is already built)
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/proxmops
 
 test: ## Run the test suite
@@ -44,4 +58,4 @@ snapshot: ## Build a local release snapshot (needs goreleaser)
 	goreleaser release --snapshot --clean
 
 clean: ## Remove build artifacts
-	rm -rf bin dist
+	rm -rf bin dist $(UI_DIR)/dist/assets
