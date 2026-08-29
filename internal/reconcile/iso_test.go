@@ -69,6 +69,19 @@ func TestIsoInSyncWhenPresent(t *testing.T) {
 	}
 }
 
+func TestIsoFilenameIgnoresQueryString(t *testing.T) {
+	store := &fakeIsoStore{present: map[string][]string{}}
+	iso := isoResource("debian-12", "https://example.com/path/debian-12.iso?token=xyz")
+
+	plan, _ := NewIsoReconciler(store).Plan(context.Background(), []manifest.Resource{iso})
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.downloads[0].Filename; got != "debian-12.iso" {
+		t.Fatalf("filename = %q, want debian-12.iso", got)
+	}
+}
+
 func TestIsoNeverDeletes(t *testing.T) {
 	// An extra ISO on the storage that no manifest declares must be left alone.
 	store := &fakeIsoStore{present: map[string][]string{"pve/local": {"stale.iso"}}}

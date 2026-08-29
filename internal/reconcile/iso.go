@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"net/url"
 	"path"
 	"slices"
 
@@ -74,7 +75,12 @@ type storageKey struct {
 	storage string
 }
 
-// isoFilename derives the storage filename from a source URL.
+// isoFilename derives the storage filename from a source URL, ignoring any
+// query string or fragment. It falls back to the raw base if the URL does not
+// parse.
 func isoFilename(source string) string {
+	if u, err := url.Parse(source); err == nil && u.Path != "" {
+		return path.Base(u.Path)
+	}
 	return path.Base(source)
 }
