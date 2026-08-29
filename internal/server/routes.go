@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -19,7 +18,19 @@ func (s *Server) routes() http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", s.handleHealth)
-		r.Get("/resources", s.handleResources)
+
+		// Public auth endpoints.
+		r.Get("/setup", s.handleSetupStatus)
+		r.Post("/setup", s.handleSetup)
+		r.Post("/login", s.handleLogin)
+		r.Post("/logout", s.handleLogout)
+
+		// Authenticated endpoints.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireAuth)
+			r.Get("/me", s.handleMe)
+			r.Get("/resources", s.handleResources)
+		})
 	})
 
 	r.Handle("/*", http.FileServerFS(web.Assets()))
@@ -49,11 +60,4 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 			"reqID", middleware.GetReqID(r.Context()),
 		)
 	})
-}
-
-// writeJSON encodes v as a JSON response with the given status code.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }

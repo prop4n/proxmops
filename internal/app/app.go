@@ -2,14 +2,17 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/prop4n/proxmops/internal/auth"
 	"github.com/prop4n/proxmops/internal/config"
 	"github.com/prop4n/proxmops/internal/proxmox"
 	"github.com/prop4n/proxmops/internal/reconcile"
 	"github.com/prop4n/proxmops/internal/server"
 	"github.com/prop4n/proxmops/internal/source"
+	"github.com/prop4n/proxmops/internal/store"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -28,8 +31,23 @@ func (a *App) Plan(ctx context.Context) (reconcile.Plan, error) {
 }
 
 func (a *App) Run(ctx context.Context, addr string) error {
+	st, err := store.Open(a.cfg.Server.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer st.Close()
+
+	authSvc := auth.New(st, a.log)
+	if err := authSvc.Init(ctx); err != nil {
+		return fmt.Errorf("init auth: %w", err)
+	}
+
 	engine := a.newEngine()
-	srv := server.New(addr, a.log)
+	srv := server.New(server.Options{
+		Addr:         addr,
+		Auth:         authSvc,
+		CookieSecure: a.cfg.Server.CookieSecure,
+	}, a.log)
 
 	errc := make(chan error, 2)
 	go func() { errc <- srv.Start() }()

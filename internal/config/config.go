@@ -24,6 +24,15 @@ type Config struct {
 	Cluster   Cluster   `mapstructure:"cluster"`
 	Source    Source    `mapstructure:"source"`
 	Reconcile Reconcile `mapstructure:"reconcile"`
+	Server    Server    `mapstructure:"server"`
+}
+
+// Server configures the web UI and API.
+type Server struct {
+	DatabasePath string `mapstructure:"databasePath"`
+	// CookieSecure marks session cookies Secure; enable it when serving behind
+	// HTTPS. Default false so the UI works over plain HTTP in a homelab.
+	CookieSecure bool `mapstructure:"cookieSecure"`
 }
 
 // Cluster describes how to reach the Proxmox API.
@@ -120,6 +129,7 @@ func (c *Config) resolveSecrets() error {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("source.revision", "main")
 	v.SetDefault("reconcile.interval", time.Minute)
+	v.SetDefault("server.databasePath", "proxmops.db")
 }
 
 // unmarshal decodes and validates the accumulated Viper state. Environment

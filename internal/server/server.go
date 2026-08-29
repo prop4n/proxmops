@@ -8,19 +8,34 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/prop4n/proxmops/internal/auth"
 )
 
 // Server wraps an http.Server with the proxmops routes mounted.
 type Server struct {
-	http *http.Server
-	log  *slog.Logger
+	http         *http.Server
+	log          *slog.Logger
+	auth         *auth.Service
+	cookieSecure bool
 }
 
-// New returns a Server listening on addr.
-func New(addr string, log *slog.Logger) *Server {
-	s := &Server{log: log}
+// Options configures a Server.
+type Options struct {
+	Addr         string
+	Auth         *auth.Service
+	CookieSecure bool
+}
+
+// New returns a Server listening on opts.Addr.
+func New(opts Options, log *slog.Logger) *Server {
+	s := &Server{
+		log:          log,
+		auth:         opts.Auth,
+		cookieSecure: opts.CookieSecure,
+	}
 	s.http = &http.Server{
-		Addr:              addr,
+		Addr:              opts.Addr,
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
