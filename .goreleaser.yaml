@@ -1,0 +1,51 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: proxmops
+    main: ./cmd/proxmops
+    binary: proxmops
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/prop4n/proxmops/internal/version.Version={{.Version}}
+      - -X github.com/prop4n/proxmops/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/prop4n/proxmops/internal/version.Date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/prop4n/proxmops:{{ .Version }}"
+      - "ghcr.io/prop4n/proxmops:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .ShortCommit }}"
+      - "--build-arg=DATE={{ .Date }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false

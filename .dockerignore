@@ -1,0 +1,8 @@
+.git
+bin/
+dist/
+*.md
+.github/
+web/ui/node_modules/
+proxmops.yaml
+proxmops.local.yaml
