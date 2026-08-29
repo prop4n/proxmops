@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,6 +12,11 @@ import (
 // EnvPrefix is prepended to environment variables bound to config keys.
 const EnvPrefix = "PROXMOPS"
 
+// envClusterTokenSecret is the environment variable that supplies the Proxmox
+// API token secret. It is resolved outside Viper so it can take precedence over
+// a file or inline value and never be logged.
+const envClusterTokenSecret = "PROXMOPS_CLUSTER_TOKENSECRET"
+
 // Config is the top-level runtime configuration.
 type Config struct {
 	Cluster   Cluster   `mapstructure:"cluster"`
@@ -19,10 +25,15 @@ type Config struct {
 }
 
 // Cluster describes how to reach the Proxmox API.
+//
+// The token secret should not be stored in the config file. Provide it through
+// the PROXMOPS_CLUSTER_TOKENSECRET environment variable or TokenSecretFile; an
+// inline TokenSecret is accepted but warned about.
 type Cluster struct {
 	Endpoint           string `mapstructure:"endpoint"`
 	TokenID            string `mapstructure:"tokenId"`
 	TokenSecret        string `mapstructure:"tokenSecret"`
+	TokenSecretFile    string `mapstructure:"tokenSecretFile"`
 	InsecureSkipVerify bool   `mapstructure:"insecureSkipVerify"`
 }
 
@@ -56,7 +67,34 @@ func Load(path string) (Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
-	return unmarshal(v)
+
+	cfg, err := unmarshal(v)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.resolveSecrets(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// resolveSecrets fills secret fields from their most secure available source and
+// warns when a secret is stored inline in the config file.
+func (c *Config) resolveSecrets() error {
+	secret, fromInline, err := resolveSecret(envClusterTokenSecret, c.Cluster.TokenSecretFile, c.Cluster.TokenSecret)
+	if err != nil {
+		return err
+	}
+	if fromInline {
+		slog.Warn("cluster.tokenSecret is stored in clear text in the config file; "+
+			"prefer "+envClusterTokenSecret+" or cluster.tokenSecretFile",
+			"key", "cluster.tokenSecret")
+	}
+	c.Cluster.TokenSecret = secret
+	return nil
 }
 
 // setDefaults registers the values used when a key is absent from every layer.
@@ -79,17 +117,15 @@ func unmarshal(v *viper.Viper) (Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 
 // envBoundKeys are the config keys that may be supplied through the environment.
+// The token secret is deliberately absent: it is resolved by resolveSecrets so
+// it can come from a file and never leak through Viper's key handling.
 var envBoundKeys = []string{
 	"cluster.endpoint",
 	"cluster.tokenId",
-	"cluster.tokenSecret",
 	"cluster.insecureSkipVerify",
 	"source.repoURL",
 	"source.path",
