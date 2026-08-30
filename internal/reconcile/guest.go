@@ -135,11 +135,15 @@ func guestDrift(vm manifest.VirtualMachine, obs proxmox.Object) (string, proxmox
 	// Only manage fields the manifest actually declares: unspecified cores or
 	// memory (0) and an unset power state are left as observed, so a partial
 	// manifest never fights Proxmox defaults.
-	upd := proxmox.GuestUpdate{Node: obs.Node, VMID: obs.VMID, Cores: obs.Cores, MemoryMB: obs.MemoryMB, Running: obs.Running}
+	upd := proxmox.GuestUpdate{Node: obs.Node, VMID: obs.VMID, Cores: obs.Cores, MemoryMB: obs.MemoryMB, CPU: obs.CPU, Running: obs.Running}
 	var reasons []string
 	if vm.Spec.Cores > 0 && vm.Spec.Cores != obs.Cores {
 		reasons = append(reasons, fmt.Sprintf("cores %d->%d", obs.Cores, vm.Spec.Cores))
 		upd.Cores = vm.Spec.Cores
+	}
+	if vm.Spec.CPU != "" && vm.Spec.CPU != obs.CPU {
+		reasons = append(reasons, fmt.Sprintf("cpu %s->%s", obs.CPU, vm.Spec.CPU))
+		upd.CPU = vm.Spec.CPU
 	}
 	if vm.Spec.Memory > 0 && vm.Spec.Memory != obs.MemoryMB {
 		reasons = append(reasons, fmt.Sprintf("memory %d->%d MB", obs.MemoryMB, vm.Spec.Memory))
@@ -178,6 +182,7 @@ func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
 		Name:     vm.Metadata.Name,
 		Cores:    vm.Spec.Cores,
 		MemoryMB: vm.Spec.Memory,
+		CPU:      vm.Spec.CPU,
 		ISO:      vm.Spec.ISO,
 		Running:  vm.Spec.State == manifest.StateRunning,
 		Tags:     tags,

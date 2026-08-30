@@ -88,9 +88,9 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 		liveCores, liveMemMB := int(r.MaxCPU), int(r.MaxMem/(1024*1024))
 		o.Cores, o.MemoryMB = liveCores, liveMemMB
 		if kind == KindVirtualMachine {
-			if cfgCores, cfgMemMB, err := c.vmConfig(ctx, r.Node, int(r.VMID)); err == nil {
-				o.Cores, o.MemoryMB = cfgCores, cfgMemMB
-				o.RebootPending = o.Running && (cfgCores != liveCores || cfgMemMB != liveMemMB)
+			if cfg, err := c.vmConfig(ctx, r.Node, int(r.VMID)); err == nil {
+				o.Cores, o.MemoryMB, o.CPU = cfg.cores, cfg.memMB, cfg.cpu
+				o.RebootPending = o.Running && (cfg.cores != liveCores || cfg.memMB != liveMemMB)
 			}
 		}
 		objects = append(objects, o)
@@ -98,15 +98,26 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 	return objects, nil
 }
 
-// vmConfig reads a VM's configured total vCPUs (sockets×cores) and memory in MB.
-func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (int, int, error) {
+// vmObservedConfig is a VM's configured values relevant to drift.
+type vmObservedConfig struct {
+	cores int
+	memMB int
+	cpu   string
+}
+
+// vmConfig reads a VM's configured total vCPUs (sockets×cores), memory in MB,
+// and CPU type.
+func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (vmObservedConfig, error) {
 	vm, err := c.vm(ctx, node, vmid)
 	if err != nil {
-		return 0, 0, err
+		return vmObservedConfig{}, err
 	}
 	cfg := vm.VirtualMachineConfig
-	cores := derefOr(cfg.Cores, 1) * derefOr(cfg.Sockets, 1)
-	return cores, int(cfg.Memory), nil
+	return vmObservedConfig{
+		cores: derefOr(cfg.Cores, 1) * derefOr(cfg.Sockets, 1),
+		memMB: int(cfg.Memory),
+		cpu:   cfg.CPU,
+	}, nil
 }
 
 // derefOr returns *p, or def when p is nil or zero.
@@ -133,6 +144,9 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 		{Name: "cores", Value: spec.Cores},
 		{Name: "memory", Value: spec.MemoryMB},
 		{Name: "scsihw", Value: "virtio-scsi-single"},
+	}
+	if spec.CPU != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "cpu", Value: spec.CPU})
 	}
 	// A blank disk is created inline; an image-backed disk is imported after
 	// create (it needs the VM to exist first).
@@ -336,10 +350,14 @@ func (c *PVE) UpdateGuest(ctx context.Context, upd GuestUpdate) error {
 	if err != nil {
 		return err
 	}
-	task, err := vm.Config(ctx,
-		pve.VirtualMachineOption{Name: "cores", Value: upd.Cores},
-		pve.VirtualMachineOption{Name: "memory", Value: upd.MemoryMB},
-	)
+	opts := []pve.VirtualMachineOption{
+		{Name: "cores", Value: upd.Cores},
+		{Name: "memory", Value: upd.MemoryMB},
+	}
+	if upd.CPU != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "cpu", Value: upd.CPU})
+	}
+	task, err := vm.Config(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
 	}

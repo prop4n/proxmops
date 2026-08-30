@@ -92,6 +92,7 @@ func TestGuestCreateCarriesManagedTag(t *testing.T) {
 func TestGuestCreateCarriesCloudInit(t *testing.T) {
 	store := &fakeGuestStore{}
 	vm := vmResource("web-01")
+	vm.Spec.CPU = "x86-64-v2"
 	vm.Spec.Disks = []manifest.Disk{{Storage: "local-lvm", Size: "20G"}}
 	vm.Spec.Image = &manifest.Image{Source: "https://ex/d/debian-12.qcow2"}
 	vm.Spec.CloudInit = &manifest.CloudInit{User: "debian", SSHKeys: []string{"ssh-ed25519 AAAA"}, IP: "dhcp"}
@@ -104,6 +105,9 @@ func TestGuestCreateCarriesCloudInit(t *testing.T) {
 		t.Fatalf("want one create, got %d", len(store.created))
 	}
 	got := store.created[0]
+	if got.CPU != "x86-64-v2" {
+		t.Errorf("cpu not propagated: %q", got.CPU)
+	}
 	if got.Image == nil || got.Image.Filename != "debian-12.qcow2" {
 		t.Fatalf("image not propagated: %+v", got.Image)
 	}
@@ -178,6 +182,26 @@ func TestGuestRebootsWhenApplyModeReboot(t *testing.T) {
 	}
 	if len(store.rebooted) != 1 || store.rebooted[0] != vmid("web-01") {
 		t.Fatalf("rebooted = %v, want [%d]", store.rebooted, vmid("web-01"))
+	}
+}
+
+func TestGuestUpdatesDriftedCPU(t *testing.T) {
+	obs := ownedGuest("web-01")
+	obs.Cores, obs.MemoryMB, obs.CPU = 2, 2048, "kvm64"
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.Cores, vm.Spec.Memory, vm.Spec.CPU = 2, 2048, "x86-64-v2"
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if len(plan.Actions) != 1 || plan.Actions[0].Type != ActionUpdate {
+		t.Fatalf("want one update, got %+v", plan.Actions)
+	}
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.updated) != 1 || store.updated[0].CPU != "x86-64-v2" {
+		t.Fatalf("update = %+v, want cpu x86-64-v2", store.updated)
 	}
 }
 

@@ -18,13 +18,16 @@ func (vm VirtualMachine) GetVMID() int { return vm.Spec.VMID }
 
 // VirtualMachineSpec describes the configuration of a QEMU guest.
 type VirtualMachineSpec struct {
-	VMID   int        `yaml:"vmid"`
-	Cores  int        `yaml:"cores"`
-	Memory int        `yaml:"memory"`
-	Disks  []Disk     `yaml:"disks,omitempty"`
-	Net    []NIC      `yaml:"net,omitempty"`
-	ISO    string     `yaml:"iso,omitempty"`
-	State  PowerState `yaml:"state,omitempty"`
+	VMID   int `yaml:"vmid"`
+	Cores  int `yaml:"cores"`
+	Memory int `yaml:"memory"`
+	// CPU is the processor type (e.g. "x86-64-v2", "host"). Empty keeps the
+	// Proxmox default.
+	CPU   string     `yaml:"cpu,omitempty"`
+	Disks []Disk     `yaml:"disks,omitempty"`
+	Net   []NIC      `yaml:"net,omitempty"`
+	ISO   string     `yaml:"iso,omitempty"`
+	State PowerState `yaml:"state,omitempty"`
 	// Image, when set, provisions the VM from a cloud image instead of a blank
 	// disk, enabling cloud-init.
 	Image *Image `yaml:"image,omitempty"`

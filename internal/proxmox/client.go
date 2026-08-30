@@ -42,6 +42,7 @@ type Object struct {
 	VMID          int
 	Cores         int
 	MemoryMB      int
+	CPU           string
 	Running       bool
 	RebootPending bool
 	Tags          []string
@@ -73,6 +74,7 @@ type GuestSpec struct {
 	Name     string
 	Cores    int
 	MemoryMB int
+	CPU      string
 	Disk     GuestDisk
 	NIC      GuestNIC
 	ISO      string
@@ -108,6 +110,7 @@ type GuestUpdate struct {
 	VMID     int
 	Cores    int
 	MemoryMB int
+	CPU      string
 	Running  bool
 }
 

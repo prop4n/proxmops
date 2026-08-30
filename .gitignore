@@ -13,6 +13,8 @@ proxmops.local.yaml
 
 # Runtime state and the encryption key for stored secrets
 proxmops.db
+proxmops.db-shm
+proxmops.db-wal
 proxmops.db.key
 *.db.key
 
