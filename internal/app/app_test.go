@@ -14,15 +14,19 @@ import (
 	"github.com/prop4n/proxmops/internal/store"
 )
 
-// fakeIsoStore records ISO deletions.
-type fakeIsoStore struct{ deleted []string }
-
-func (f *fakeIsoStore) ListISOs(context.Context, string, string) ([]string, error) {
-	return nil, nil
+// fakeDeleter records ISO and guest deletions.
+type fakeDeleter struct {
+	deletedISOs   []string
+	deletedGuests []int
 }
-func (f *fakeIsoStore) DownloadISO(context.Context, proxmox.IsoDownload) error { return nil }
-func (f *fakeIsoStore) DeleteISO(_ context.Context, node, storage, filename string) error {
-	f.deleted = append(f.deleted, node+"/"+storage+"/"+filename)
+
+func (f *fakeDeleter) DeleteISO(_ context.Context, node, storage, filename string) error {
+	f.deletedISOs = append(f.deletedISOs, node+"/"+storage+"/"+filename)
+	return nil
+}
+
+func (f *fakeDeleter) DeleteGuest(_ context.Context, obj proxmox.Object) error {
+	f.deletedGuests = append(f.deletedGuests, obj.VMID)
 	return nil
 }
 
@@ -34,33 +38,52 @@ func isoRes(name, src string) manifest.Iso {
 	}
 }
 
+func vmRes(name string, vmid int) manifest.VirtualMachine {
+	return manifest.VirtualMachine{
+		TypeMeta: manifest.TypeMeta{APIVersion: manifest.APIVersion, Kind: manifest.KindVirtualMachine},
+		Metadata: manifest.ObjectMeta{Name: name, Node: "pve"},
+		Spec:     manifest.VirtualMachineSpec{VMID: vmid},
+	}
+}
+
 func TestDeleteManagedDeletesISO(t *testing.T) {
-	store := &fakeIsoStore{}
+	del := &fakeDeleter{}
 	desired := []manifest.Resource{isoRes("nix", "https://ex/path/nixos.iso?token=x")}
 
-	if err := deleteManaged(context.Background(), desired, store, "Iso", "nix"); err != nil {
+	if err := deleteManaged(context.Background(), desired, del, "Iso", "nix"); err != nil {
 		t.Fatalf("deleteManaged: %v", err)
 	}
-	if len(store.deleted) != 1 || store.deleted[0] != "pve/local/nixos.iso" {
-		t.Fatalf("deleted = %v; want [pve/local/nixos.iso]", store.deleted)
+	if len(del.deletedISOs) != 1 || del.deletedISOs[0] != "pve/local/nixos.iso" {
+		t.Fatalf("deleted = %v; want [pve/local/nixos.iso]", del.deletedISOs)
+	}
+}
+
+func TestDeleteManagedDeletesVM(t *testing.T) {
+	del := &fakeDeleter{}
+	desired := []manifest.Resource{vmRes("web", 101)}
+
+	if err := deleteManaged(context.Background(), desired, del, "VirtualMachine", "web"); err != nil {
+		t.Fatalf("deleteManaged: %v", err)
+	}
+	if len(del.deletedGuests) != 1 || del.deletedGuests[0] != 101 {
+		t.Fatalf("deleted guests = %v; want [101]", del.deletedGuests)
 	}
 }
 
 func TestDeleteManagedNotFound(t *testing.T) {
 	desired := []manifest.Resource{isoRes("nix", "https://ex/nixos.iso")}
-	err := deleteManaged(context.Background(), desired, &fakeIsoStore{}, "Iso", "missing")
+	err := deleteManaged(context.Background(), desired, &fakeDeleter{}, "Iso", "missing")
 	if !errors.Is(err, server.ErrResourceNotFound) {
 		t.Fatalf("err = %v; want ErrResourceNotFound", err)
 	}
 }
 
 func TestDeleteManagedUnsupportedKind(t *testing.T) {
-	vm := manifest.VirtualMachine{
-		TypeMeta: manifest.TypeMeta{APIVersion: manifest.APIVersion, Kind: manifest.KindVirtualMachine},
-		Metadata: manifest.ObjectMeta{Name: "web", Node: "pve"},
-		Spec:     manifest.VirtualMachineSpec{VMID: 100},
+	net := manifest.Network{
+		TypeMeta: manifest.TypeMeta{APIVersion: manifest.APIVersion, Kind: manifest.KindNetwork},
+		Metadata: manifest.ObjectMeta{Name: "vmbr0", Node: "pve"},
 	}
-	err := deleteManaged(context.Background(), []manifest.Resource{vm}, &fakeIsoStore{}, "VirtualMachine", "web")
+	err := deleteManaged(context.Background(), []manifest.Resource{net}, &fakeDeleter{}, "Network", "vmbr0")
 	if !errors.Is(err, server.ErrDeleteUnsupported) {
 		t.Fatalf("err = %v; want ErrDeleteUnsupported", err)
 	}
@@ -95,7 +118,7 @@ func fileConfig() config.Config {
 }
 
 func TestEffectiveConfigFallsBackToFileWhenUnconfigured(t *testing.T) {
-	repo := &fakeRepo{} // no data saved → not configured
+	repo := &fakeRepo{} // no data saved -> not configured
 	a := &App{cfg: fileConfig(), set: settings.New(repo, crypt.Key{})}
 
 	got, err := a.effectiveConfig(context.Background())

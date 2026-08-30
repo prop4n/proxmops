@@ -70,14 +70,38 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 			continue
 		}
 		// An owned, present VM may have drifted on safe fields.
-		if obs.Owned() {
-			if reason, upd, drifted := guestDrift(vm, obs); drifted {
+		if !obs.Owned() {
+			continue
+		}
+		if reason, upd, drifted := guestDrift(vm, obs); drifted {
+			plan.Actions = append(plan.Actions, Action{
+				Type:   ActionUpdate,
+				Kind:   manifest.KindVirtualMachine,
+				Name:   vm.Metadata.Name,
+				Reason: reason,
+				Apply:  func(ctx context.Context) error { return g.store.UpdateGuest(ctx, upd) },
+			})
+			continue
+		}
+		// Config already matches desired, but a prior change to a running VM is
+		// waiting on a restart. Reboot when opted in; otherwise just report it.
+		if obs.RebootPending {
+			if vm.Spec.ApplyMode == manifest.ApplyModeReboot {
+				node, id := obs.Node, obs.VMID
 				plan.Actions = append(plan.Actions, Action{
 					Type:   ActionUpdate,
 					Kind:   manifest.KindVirtualMachine,
 					Name:   vm.Metadata.Name,
-					Reason: reason,
-					Apply:  func(ctx context.Context) error { return g.store.UpdateGuest(ctx, upd) },
+					Reason: "restarting to apply pending changes",
+					Apply:  func(ctx context.Context) error { return g.store.RebootGuest(ctx, node, id) },
+				})
+			} else {
+				plan.Actions = append(plan.Actions, Action{
+					Type:          ActionUpdate,
+					Kind:          manifest.KindVirtualMachine,
+					Name:          vm.Metadata.Name,
+					Reason:        "reboot required to apply pending changes (set applyMode: reboot to automate)",
+					Informational: true,
 				})
 			}
 		}
@@ -114,17 +138,17 @@ func guestDrift(vm manifest.VirtualMachine, obs proxmox.Object) (string, proxmox
 	upd := proxmox.GuestUpdate{Node: obs.Node, VMID: obs.VMID, Cores: obs.Cores, MemoryMB: obs.MemoryMB, Running: obs.Running}
 	var reasons []string
 	if vm.Spec.Cores > 0 && vm.Spec.Cores != obs.Cores {
-		reasons = append(reasons, fmt.Sprintf("cores %d→%d", obs.Cores, vm.Spec.Cores))
+		reasons = append(reasons, fmt.Sprintf("cores %d->%d", obs.Cores, vm.Spec.Cores))
 		upd.Cores = vm.Spec.Cores
 	}
 	if vm.Spec.Memory > 0 && vm.Spec.Memory != obs.MemoryMB {
-		reasons = append(reasons, fmt.Sprintf("memory %d→%d MB", obs.MemoryMB, vm.Spec.Memory))
+		reasons = append(reasons, fmt.Sprintf("memory %d->%d MB", obs.MemoryMB, vm.Spec.Memory))
 		upd.MemoryMB = vm.Spec.Memory
 	}
 	if vm.Spec.State != "" {
 		wantRunning := vm.Spec.State == manifest.StateRunning
 		if wantRunning != obs.Running {
-			reasons = append(reasons, fmt.Sprintf("state %s→%s", powerWord(obs.Running), powerWord(wantRunning)))
+			reasons = append(reasons, fmt.Sprintf("state %s->%s", powerWord(obs.Running), powerWord(wantRunning)))
 			upd.Running = wantRunning
 		}
 	}

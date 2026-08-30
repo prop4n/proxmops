@@ -30,18 +30,21 @@ const (
 	KindNetwork        Kind = "Network"
 )
 
-// Object is the observed state of a guest (VM or container). Cores, MemoryMB and
-// Running come from the cluster resource listing and back drift detection.
+// Object is the observed state of a guest (VM or container). Cores and MemoryMB
+// are the VM's configured values (authoritative for drift). RebootPending is set
+// when the running VM's live cores/memory still differ from its config, i.e. a
+// prior change awaits a restart.
 type Object struct {
-	Kind     Kind
-	Name     string
-	Node     string
-	ID       string
-	VMID     int
-	Cores    int
-	MemoryMB int
-	Running  bool
-	Tags     []string
+	Kind          Kind
+	Name          string
+	Node          string
+	ID            string
+	VMID          int
+	Cores         int
+	MemoryMB      int
+	Running       bool
+	RebootPending bool
+	Tags          []string
 }
 
 // Owned reports whether the object carries the proxmops ownership tag.
@@ -98,6 +101,8 @@ type GuestStore interface {
 	DeleteGuest(ctx context.Context, obj Object) error
 	// UpdateGuest applies safe config drift corrections to an existing guest.
 	UpdateGuest(ctx context.Context, upd GuestUpdate) error
+	// RebootGuest restarts a VM to apply pending config changes.
+	RebootGuest(ctx context.Context, node string, vmid int) error
 }
 
 // IsoDownload describes an ISO to fetch onto a storage.

@@ -57,18 +57,32 @@ func (a *App) DeleteResource(ctx context.Context, kind, name string) error {
 	return deleteManaged(ctx, desired, proxmox.New(cfg.Cluster), kind, name)
 }
 
-// deleteManaged finds the desired resource by kind and name and deletes it. Only
-// ISO deletion is supported for now; other kinds return ErrDeleteUnsupported.
-func deleteManaged(ctx context.Context, desired []manifest.Resource, isos proxmox.IsoStore, kind, name string) error {
+// clusterDeleter is the subset of the Proxmox client that deletes resources.
+type clusterDeleter interface {
+	DeleteISO(ctx context.Context, node, storage, filename string) error
+	DeleteGuest(ctx context.Context, obj proxmox.Object) error
+}
+
+// deleteManaged finds the desired resource by kind and name and deletes it from
+// the cluster. ISO and VirtualMachine are supported; other kinds return
+// ErrDeleteUnsupported.
+func deleteManaged(ctx context.Context, desired []manifest.Resource, del clusterDeleter, kind, name string) error {
 	for _, res := range desired {
 		if string(res.GetTypeMeta().Kind) != kind || res.GetObjectMeta().Name != name {
 			continue
 		}
-		iso, ok := res.(manifest.Iso)
-		if !ok {
+		switch r := res.(type) {
+		case manifest.Iso:
+			return del.DeleteISO(ctx, r.Spec.Node, r.Spec.Storage, r.Filename())
+		case manifest.VirtualMachine:
+			return del.DeleteGuest(ctx, proxmox.Object{
+				Kind: proxmox.KindVirtualMachine,
+				Node: r.Metadata.Node,
+				VMID: r.Spec.VMID,
+			})
+		default:
 			return server.ErrDeleteUnsupported
 		}
-		return isos.DeleteISO(ctx, iso.Spec.Node, iso.Spec.Storage, iso.Filename())
 	}
 	return server.ErrResourceNotFound
 }

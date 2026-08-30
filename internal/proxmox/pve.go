@@ -72,19 +72,48 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 		if !ok {
 			continue
 		}
-		objects = append(objects, Object{
-			Kind:     kind,
-			Name:     r.Name,
-			Node:     r.Node,
-			ID:       r.ID,
-			VMID:     int(r.VMID),
-			Cores:    int(r.MaxCPU),
-			MemoryMB: int(r.MaxMem / (1024 * 1024)),
-			Running:  r.Status == "running",
-			Tags:     parseTags(r.Tags),
-		})
+		o := Object{
+			Kind:    kind,
+			Name:    r.Name,
+			Node:    r.Node,
+			ID:      r.ID,
+			VMID:    int(r.VMID),
+			Running: r.Status == "running",
+			Tags:    parseTags(r.Tags),
+		}
+		// Configured cores/memory come from the VM config (authoritative for
+		// drift); the cluster listing only carries the live, running values.
+		// When they differ on a running VM, a change is pending a restart.
+		liveCores, liveMemMB := int(r.MaxCPU), int(r.MaxMem/(1024*1024))
+		o.Cores, o.MemoryMB = liveCores, liveMemMB
+		if kind == KindVirtualMachine {
+			if cfgCores, cfgMemMB, err := c.vmConfig(ctx, r.Node, int(r.VMID)); err == nil {
+				o.Cores, o.MemoryMB = cfgCores, cfgMemMB
+				o.RebootPending = o.Running && (cfgCores != liveCores || cfgMemMB != liveMemMB)
+			}
+		}
+		objects = append(objects, o)
 	}
 	return objects, nil
+}
+
+// vmConfig reads a VM's configured total vCPUs (sockets×cores) and memory in MB.
+func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (int, int, error) {
+	vm, err := c.vm(ctx, node, vmid)
+	if err != nil {
+		return 0, 0, err
+	}
+	cfg := vm.VirtualMachineConfig
+	cores := derefOr(cfg.Cores, 1) * derefOr(cfg.Sockets, 1)
+	return cores, int(cfg.Memory), nil
+}
+
+// derefOr returns *p, or def when p is nil or zero.
+func derefOr(p *int, def int) int {
+	if p == nil || *p == 0 {
+		return def
+	}
+	return *p
 }
 
 // CreateGuest provisions a QEMU VM from spec, tags it, and starts it when
@@ -183,6 +212,16 @@ func (c *PVE) UpdateGuest(ctx context.Context, upd GuestUpdate) error {
 		return c.setPower(ctx, upd.Node, upd.VMID, upd.Running)
 	}
 	return nil
+}
+
+// RebootGuest restarts a VM so pending config changes take effect. Proxmox
+// applies pending config when the QEMU process is recreated, so this cold-cycles
+// the VM (stop then start) rather than issuing an in-guest ACPI reboot.
+func (c *PVE) RebootGuest(ctx context.Context, node string, vmid int) error {
+	if err := c.setPower(ctx, node, vmid, false); err != nil {
+		return err
+	}
+	return c.setPower(ctx, node, vmid, true)
 }
 
 // vm resolves a VirtualMachine handle by node and vmid.

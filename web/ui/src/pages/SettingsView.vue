@@ -80,7 +80,7 @@ onMounted(load)
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
       <p class="mt-1 text-sm text-muted-foreground">
-        Cluster, repository, and reconciliation — applied without a restart.
+        Cluster, repository, and reconciliation, applied without a restart.
       </p>
     </header>
 
@@ -142,8 +142,8 @@ onMounted(load)
             <Label for="repoURL">Repository URL</Label>
             <Input id="repoURL" v-model="form.source.repoURL" placeholder="https://github.com/you/homelab.git" />
             <p class="text-xs text-muted-foreground">
-              A Git remote (https://…, git@…) is cloned; anything else — e.g.
-              <code>local</code> — reads the Path below directly from the
+              A Git remote (https://..., git@...) is cloned; anything else, e.g.
+              <code>local</code>, reads the Path below directly from the
               local filesystem.
             </p>
           </div>
@@ -205,10 +205,10 @@ onMounted(load)
 
       <div class="flex items-center gap-3">
         <Button type="submit" :disabled="saving || loading">
-          {{ saving ? 'Saving…' : 'Save settings' }}
+          {{ saving ? 'Saving...' : 'Save settings' }}
         </Button>
         <Button type="button" variant="outline" :disabled="testing || saving || loading" @click="test">
-          {{ testing ? 'Testing…' : 'Save and test connections' }}
+          {{ testing ? 'Testing...' : 'Save and test connections' }}
         </Button>
       </div>
     </form>
@@ -223,7 +223,7 @@ onMounted(load)
           <XCircle v-else class="mt-0.5 size-4 text-destructive" />
           <div>
             <span class="font-medium">Proxmox cluster</span>
-            <span v-if="!testResult.cluster.error" class="text-muted-foreground"> — reachable, token accepted</span>
+            <span v-if="!testResult.cluster.error" class="text-muted-foreground">: reachable, token accepted</span>
             <p v-else class="text-destructive">{{ testResult.cluster.error }}</p>
           </div>
         </div>
@@ -232,7 +232,7 @@ onMounted(load)
           <XCircle v-else class="mt-0.5 size-4 text-destructive" />
           <div>
             <span class="font-medium">Git repository</span>
-            <span v-if="!testResult.source.error" class="text-muted-foreground"> — reachable, credentials accepted</span>
+            <span v-if="!testResult.source.error" class="text-muted-foreground">: reachable, credentials accepted</span>
             <p v-else class="text-destructive">{{ testResult.source.error }}</p>
           </div>
         </div>

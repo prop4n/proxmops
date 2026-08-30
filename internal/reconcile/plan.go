@@ -34,6 +34,9 @@ type Action struct {
 	Name   string
 	Reason string
 	Apply  func(ctx context.Context) error
+	// Informational actions report a condition (e.g. "reboot required") in the
+	// status without being applied. The engine never dispatches them.
+	Informational bool
 }
 
 // String renders an action for display, e.g. "create VirtualMachine/web-01".

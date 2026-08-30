@@ -12,7 +12,7 @@ import ResourceNode from '@/components/graph/ResourceNode.vue'
 import { buildGraph } from '@/lib/graph'
 import type { ResourceStatus, SettingsSnapshot } from '@/lib/api'
 
-// Interactive topology graph: source → kind → resource, laid out by dagre.
+// Interactive topology graph: source -> kind -> resource, laid out by dagre.
 
 const props = defineProps<{
   resources: ResourceStatus[]
@@ -31,8 +31,8 @@ const initial = build()
 const nodes = ref(initial.nodes)
 const edges = ref(initial.edges)
 
-// The structural key covers only what changes the graph's shape — which nodes
-// exist and the filter — never a resource's sync state. A plain state flip
+// The structural key covers only what changes the graph's shape (which nodes
+// exist and the filter), never a resource's sync state. A plain state flip
 // (Synced ↔ OutOfSync) therefore updates node visuals in place, without a
 // relayout or a fitView that would jarringly re-zoom the canvas.
 function structuralKey(): string {

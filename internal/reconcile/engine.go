@@ -92,6 +92,8 @@ func (e *Engine) Scan(ctx context.Context, d *Dispatcher) error {
 	}
 	for _, a := range plan.Actions {
 		switch {
+		case a.Informational:
+			// Status-only (e.g. reboot required); never applied.
 		case a.Type == ActionDelete && !e.opts.Prune:
 			// Prune disabled: owned orphans are reported but never deleted.
 		case e.opts.DryRun:

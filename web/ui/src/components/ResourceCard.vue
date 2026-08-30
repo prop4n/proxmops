@@ -14,7 +14,7 @@ const props = defineProps<{ resource: ResourceStatus }>()
 
 const drifted = computed(() => props.resource.state === 'OutOfSync')
 const meta = computed(() => kindOf(props.resource.kind))
-const deletable = computed(() => props.resource.kind === 'Iso')
+const deletable = computed(() => props.resource.kind === 'Iso' || props.resource.kind === 'VirtualMachine')
 
 const confirming = ref(false)
 const deleting = ref(false)
@@ -40,7 +40,7 @@ function age(r: ResourceStatus): string {
 }
 
 function action(r: ResourceStatus): string {
-  return r.reason ? `${r.action} — ${r.reason}` : (r.action ?? '')
+  return r.reason ? `${r.action}: ${r.reason}` : (r.action ?? '')
 }
 </script>
 

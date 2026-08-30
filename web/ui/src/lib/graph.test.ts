@@ -43,7 +43,7 @@ describe('buildGraph', () => {
   it('marks edges to drifted resources so the branch stays visible', () => {
     const { edges } = build([res('Iso', 'ok'), res('Iso', 'bad', 'OutOfSync')])
     const drift = edges.filter(e => e.class === 'edge-drift')
-    expect(drift.length).toBe(2) // the resource edge plus the source→kind edge
+    expect(drift.length).toBe(2) // the resource edge plus the source->kind edge
 
   })
 

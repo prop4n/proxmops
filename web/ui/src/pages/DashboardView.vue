@@ -119,7 +119,7 @@ onMounted(async () => {
     </p>
 
     <div v-if="notConfigured" class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed px-4 py-3">
-      <p class="text-sm text-muted-foreground">The daemon has no target yet — set the cluster and repository.</p>
+      <p class="text-sm text-muted-foreground">The daemon has no target yet. Set the cluster and repository.</p>
       <Button variant="outline" size="sm" as-child>
         <RouterLink to="/settings">
           <Settings2 class="size-4" /> Open settings
