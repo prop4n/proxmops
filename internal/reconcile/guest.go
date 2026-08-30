@@ -145,6 +145,26 @@ func guestDrift(vm manifest.VirtualMachine, obs proxmox.Object) (string, proxmox
 		reasons = append(reasons, fmt.Sprintf("cpu %s->%s", obs.CPU, vm.Spec.CPU))
 		upd.CPU = vm.Spec.CPU
 	}
+	if ci := vm.Spec.CloudInit; ci != nil {
+		if ci.User != "" && ci.User != obs.CIUser {
+			reasons = append(reasons, fmt.Sprintf("ci-user %s->%s", obs.CIUser, ci.User))
+			upd.CIUser = ci.User
+		}
+		// Proxmox stores ipconfig as "ip=..."; normalise the desired value so a
+		// bare "dhcp" doesn't read as perpetual drift against "ip=dhcp".
+		if wantIP := normalizeIP(ci.IP); ci.IP != "" && wantIP != obs.IP {
+			reasons = append(reasons, fmt.Sprintf("ip %s->%s", obs.IP, wantIP))
+			upd.IP = wantIP
+		}
+		if ci.Nameserver != "" && ci.Nameserver != obs.Nameserver {
+			reasons = append(reasons, fmt.Sprintf("nameserver %s->%s", obs.Nameserver, ci.Nameserver))
+			upd.Nameserver = ci.Nameserver
+		}
+		if ci.SearchDomain != "" && ci.SearchDomain != obs.SearchDomain {
+			reasons = append(reasons, fmt.Sprintf("searchdomain %s->%s", obs.SearchDomain, ci.SearchDomain))
+			upd.SearchDomain = ci.SearchDomain
+		}
+	}
 	if vm.Spec.Memory > 0 && vm.Spec.Memory != obs.MemoryMB {
 		reasons = append(reasons, fmt.Sprintf("memory %d->%d MB", obs.MemoryMB, vm.Spec.Memory))
 		upd.MemoryMB = vm.Spec.Memory
@@ -160,6 +180,15 @@ func guestDrift(vm manifest.VirtualMachine, obs proxmox.Object) (string, proxmox
 		return "", proxmox.GuestUpdate{}, false
 	}
 	return strings.Join(reasons, ", "), upd, true
+}
+
+// normalizeIP mirrors Proxmox's ipconfig form: a bare mode like "dhcp" becomes
+// "ip=dhcp"; a full "ip=...,gw=..." is left as is.
+func normalizeIP(ip string) string {
+	if ip != "" && !strings.Contains(ip, "=") {
+		return "ip=" + ip
+	}
+	return ip
 }
 
 func powerWord(running bool) string {

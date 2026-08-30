@@ -46,6 +46,11 @@ type Object struct {
 	Running       bool
 	RebootPending bool
 	Tags          []string
+	// Observed cloud-init scalars (from VM config), for drift detection.
+	CIUser       string
+	IP           string
+	Nameserver   string
+	SearchDomain string
 }
 
 // Owned reports whether the object carries the proxmops ownership tag.
@@ -112,6 +117,11 @@ type GuestUpdate struct {
 	MemoryMB int
 	CPU      string
 	Running  bool
+	// Cloud-init scalars to set when they drift; empty values are left untouched.
+	CIUser       string
+	IP           string
+	Nameserver   string
+	SearchDomain string
 }
 
 // GuestStore reads and mutates QEMU guests and LXC containers. Ownership is

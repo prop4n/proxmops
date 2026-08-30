@@ -205,6 +205,43 @@ func TestGuestUpdatesDriftedCPU(t *testing.T) {
 	}
 }
 
+func TestGuestUpdatesDriftedNameserver(t *testing.T) {
+	obs := ownedGuest("web-01")
+	obs.CIUser, obs.IP, obs.Nameserver = "debian", "ip=dhcp", "1.1.1.1"
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.Image = &manifest.Image{Source: "https://ex/d.qcow2"}
+	vm.Spec.CloudInit = &manifest.CloudInit{User: "debian", IP: "dhcp", Nameserver: "1.1.1.2"}
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if len(plan.Actions) != 1 || plan.Actions[0].Type != ActionUpdate {
+		t.Fatalf("want one update, got %+v", plan.Actions)
+	}
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.updated) != 1 || store.updated[0].Nameserver != "1.1.1.2" {
+		t.Fatalf("update = %+v, want nameserver 1.1.1.2", store.updated)
+	}
+}
+
+func TestGuestNoDriftOnMatchingCloudInit(t *testing.T) {
+	// "dhcp" desired must match Proxmox's stored "ip=dhcp" (no perpetual drift).
+	obs := ownedGuest("web-01")
+	obs.CIUser, obs.IP, obs.Nameserver = "debian", "ip=dhcp", "1.1.1.1"
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.Image = &manifest.Image{Source: "https://ex/d.qcow2"}
+	vm.Spec.CloudInit = &manifest.CloudInit{User: "debian", IP: "dhcp", Nameserver: "1.1.1.1"}
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if !plan.Empty() {
+		t.Fatalf("want empty plan, got %+v", plan.Actions)
+	}
+}
+
 func TestGuestNoUpdateWhenConfigMatches(t *testing.T) {
 	obs := ownedGuest("web-01")
 	obs.Cores, obs.MemoryMB = 2, 1024

@@ -90,6 +90,7 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 		if kind == KindVirtualMachine {
 			if cfg, err := c.vmConfig(ctx, r.Node, int(r.VMID)); err == nil {
 				o.Cores, o.MemoryMB, o.CPU = cfg.cores, cfg.memMB, cfg.cpu
+				o.CIUser, o.IP, o.Nameserver, o.SearchDomain = cfg.ciUser, cfg.ip, cfg.nameserver, cfg.searchDomain
 				o.RebootPending = o.Running && (cfg.cores != liveCores || cfg.memMB != liveMemMB)
 			}
 		}
@@ -100,13 +101,17 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 
 // vmObservedConfig is a VM's configured values relevant to drift.
 type vmObservedConfig struct {
-	cores int
-	memMB int
-	cpu   string
+	cores        int
+	memMB        int
+	cpu          string
+	ciUser       string
+	ip           string
+	nameserver   string
+	searchDomain string
 }
 
-// vmConfig reads a VM's configured total vCPUs (sockets×cores), memory in MB,
-// and CPU type.
+// vmConfig reads the VM config values proxmops reconciles: cpu/cores/memory and
+// the cloud-init scalars.
 func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (vmObservedConfig, error) {
 	vm, err := c.vm(ctx, node, vmid)
 	if err != nil {
@@ -114,9 +119,13 @@ func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (vmObservedCo
 	}
 	cfg := vm.VirtualMachineConfig
 	return vmObservedConfig{
-		cores: derefOr(cfg.Cores, 1) * derefOr(cfg.Sockets, 1),
-		memMB: int(cfg.Memory),
-		cpu:   cfg.CPU,
+		cores:        derefOr(cfg.Cores, 1) * derefOr(cfg.Sockets, 1),
+		memMB:        int(cfg.Memory),
+		cpu:          cfg.CPU,
+		ciUser:       cfg.CIUser,
+		ip:           cfg.IPConfigs["ipconfig0"],
+		nameserver:   cfg.Nameserver,
+		searchDomain: cfg.Searchdomain,
 	}, nil
 }
 
@@ -356,6 +365,18 @@ func (c *PVE) UpdateGuest(ctx context.Context, upd GuestUpdate) error {
 	}
 	if upd.CPU != "" {
 		opts = append(opts, pve.VirtualMachineOption{Name: "cpu", Value: upd.CPU})
+	}
+	if upd.CIUser != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: upd.CIUser})
+	}
+	if upd.IP != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ipconfig0", Value: upd.IP})
+	}
+	if upd.Nameserver != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "nameserver", Value: upd.Nameserver})
+	}
+	if upd.SearchDomain != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "searchdomain", Value: upd.SearchDomain})
 	}
 	task, err := vm.Config(ctx, opts...)
 	if err != nil {
