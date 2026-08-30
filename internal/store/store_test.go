@@ -149,6 +149,43 @@ func TestSessionCascadeOnAccountDelete(t *testing.T) {
 	}
 }
 
+func TestResourceEvents(t *testing.T) {
+	st := open(t)
+	ctx := context.Background()
+
+	if evs, err := st.EventsFor(ctx, "Iso", "nix", 10); err != nil || len(evs) != 0 {
+		t.Fatalf("EventsFor empty = %v, %v; want none", evs, err)
+	}
+
+	for _, e := range []ResourceEvent{
+		{Kind: "Iso", Name: "nix", Type: "drifted", Commit: "abc"},
+		{Kind: "Iso", Name: "nix", Type: "applied", Reason: "create", Commit: "abc"},
+		{Kind: "Iso", Name: "other", Type: "drifted"},
+	} {
+		if err := st.AppendEvent(ctx, e); err != nil {
+			t.Fatalf("AppendEvent: %v", err)
+		}
+	}
+
+	evs, err := st.EventsFor(ctx, "Iso", "nix", 10)
+	if err != nil {
+		t.Fatalf("EventsFor: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("got %d events for nix, want 2", len(evs))
+	}
+	// Newest first.
+	if evs[0].Type != "applied" || evs[1].Type != "drifted" {
+		t.Fatalf("order wrong: %+v", evs)
+	}
+	if evs[0].Reason != "create" || evs[0].Commit != "abc" {
+		t.Errorf("fields not persisted: %+v", evs[0])
+	}
+	if evs[0].At.IsZero() {
+		t.Error("At not stamped")
+	}
+}
+
 func TestSettingsRoundTrip(t *testing.T) {
 	st := open(t)
 	ctx := context.Background()

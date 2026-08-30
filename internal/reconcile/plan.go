@@ -37,6 +37,9 @@ type Action struct {
 	// Informational actions report a condition (e.g. "reboot required") in the
 	// status without being applied. The engine never dispatches them.
 	Informational bool
+	// Commit is the Git commit this action was planned from, set by the engine
+	// before dispatch so applied/failed events are attributed to it.
+	Commit string
 }
 
 // String renders an action for display, e.g. "create VirtualMachine/web-01".
