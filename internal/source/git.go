@@ -28,6 +28,7 @@ type Git struct {
 	revision string
 	cacheDir string
 	auth     transport.AuthMethod
+	commit   string
 }
 
 // newGit builds a Git source from configuration.
@@ -100,8 +101,13 @@ func (g *Git) sync(ctx context.Context) error {
 	if err := wt.Checkout(&git.CheckoutOptions{Hash: *hash, Force: true}); err != nil {
 		return fmt.Errorf("checkout %s: %w", hash, err)
 	}
+	g.commit = hash.String()
 	return nil
 }
+
+// Commit returns the full hash of the commit checked out on the last successful
+// sync, or empty before the first sync.
+func (g *Git) Commit() string { return g.commit }
 
 // resolve turns the configured revision into a commit hash, preferring the
 // remote-tracking branch so a branch name follows upstream after a fetch.
