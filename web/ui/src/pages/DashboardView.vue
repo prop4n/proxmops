@@ -112,6 +112,14 @@ onMounted(async () => {
         <span class="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">Reconciled</span>
         <span class="font-mono text-xs">{{ formatAge(snapshot.updatedAt) }} ago</span>
       </div>
+      <div
+        v-if="snapshot?.commit"
+        class="flex items-center gap-2 rounded-md border bg-card px-3 py-1.5 text-sm"
+        :title="snapshot.commit"
+      >
+        <span class="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">Commit</span>
+        <span class="font-mono text-xs">{{ snapshot.commit.slice(0, 7) }}</span>
+      </div>
     </div>
 
     <p v-if="snapshot?.error && !notConfigured" class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">

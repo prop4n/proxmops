@@ -183,8 +183,21 @@ func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
 		UpdatedAt:  time.Now(),
 		InSync:     plan.Empty(),
 		Configured: true,
+		Commit:     e.commit(),
 		Resources:  resources,
 	})
+}
+
+// committer is implemented by sources that track a Git commit (the Git source);
+// a local directory source is not one.
+type committer interface{ Commit() string }
+
+// commit returns the source's current commit, or empty for a non-Git source.
+func (e *Engine) commit() string {
+	if c, ok := e.source.(committer); ok {
+		return c.Commit()
+	}
+	return ""
 }
 
 // recordError marks the current snapshot as failed while keeping prior results.

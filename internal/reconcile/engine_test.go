@@ -16,6 +16,37 @@ type staticSource struct{ res []manifest.Resource }
 
 func (s staticSource) Desired(context.Context) ([]manifest.Resource, error) { return s.res, nil }
 
+// commitSource is a source that also reports a Git commit.
+type commitSource struct {
+	staticSource
+	commit string
+}
+
+func (s commitSource) Commit() string { return s.commit }
+
+func TestScanRecordsCommit(t *testing.T) {
+	st := status.NewStore()
+	src := commitSource{commit: "abc1234"}
+	eng := NewEngine(src, []Reconciler{staticReconciler{}}, Options{AutoSync: false}, testLogger(), st)
+	if err := eng.Scan(context.Background(), NewDispatcher(1, testLogger())); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Get().Commit; got != "abc1234" {
+		t.Fatalf("snapshot commit = %q, want abc1234", got)
+	}
+}
+
+func TestScanNoCommitForPlainSource(t *testing.T) {
+	st := status.NewStore()
+	eng := NewEngine(staticSource{}, []Reconciler{staticReconciler{}}, Options{AutoSync: false}, testLogger(), st)
+	if err := eng.Scan(context.Background(), NewDispatcher(1, testLogger())); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Get().Commit; got != "" {
+		t.Fatalf("snapshot commit = %q, want empty for a non-Git source", got)
+	}
+}
+
 // staticReconciler returns a fixed plan whose actions record when applied.
 type staticReconciler struct{ plan Plan }
 

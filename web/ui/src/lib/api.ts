@@ -45,6 +45,8 @@ export interface StatusSnapshot {
   inSync: boolean
   /** False when the daemon has no target yet; the UI must show the setup path. */
   configured: boolean
+  /** Git commit the desired state was read from; empty for a local source. */
+  commit?: string
   error?: string
   resources: ResourceStatus[]
 }

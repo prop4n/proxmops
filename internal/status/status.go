@@ -38,9 +38,12 @@ type Snapshot struct {
 	InSync    bool      `json:"inSync"`
 	// Configured reports whether the daemon has a usable target. A false
 	// value means the web UI must be filled in before anything reconciles.
-	Configured bool       `json:"configured"`
-	Error      string     `json:"error,omitempty"`
-	Resources  []Resource `json:"resources"`
+	Configured bool `json:"configured"`
+	// Commit is the Git commit the desired state was read from, empty for a
+	// local (non-Git) source.
+	Commit    string     `json:"commit,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	Resources []Resource `json:"resources"`
 }
 
 // Store holds the current Snapshot and fans out updates to subscribers.
