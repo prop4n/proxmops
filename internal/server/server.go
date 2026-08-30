@@ -24,6 +24,7 @@ type Server struct {
 	deleter      ResourceDeleter
 	detailer     ResourceDetailer
 	events       EventsReader
+	logs         LogSource
 	cookieSecure bool
 }
 
@@ -36,6 +37,7 @@ type Options struct {
 	Deleter      ResourceDeleter
 	Detailer     ResourceDetailer
 	Events       EventsReader
+	Logs         LogSource
 	CookieSecure bool
 }
 
@@ -49,6 +51,7 @@ func New(opts Options, log *slog.Logger) *Server {
 		deleter:      opts.Deleter,
 		detailer:     opts.Detailer,
 		events:       opts.Events,
+		logs:         opts.Logs,
 		cookieSecure: opts.CookieSecure,
 	}
 	s.http = &http.Server{

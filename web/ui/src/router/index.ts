@@ -10,6 +10,7 @@ const router = createRouter({
       component: () => import('@/components/layout/AppShell.vue'),
       children: [
         { path: '', name: 'dashboard', component: () => import('@/pages/DashboardView.vue'), meta: { requiresAuth: true } },
+        { path: 'logs', name: 'logs', component: () => import('@/pages/LogsView.vue'), meta: { requiresAuth: true } },
         { path: 'settings', name: 'settings', component: () => import('@/pages/SettingsView.vue'), meta: { requiresAuth: true } },
       ],
     },

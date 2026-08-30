@@ -13,6 +13,7 @@ import (
 	"github.com/prop4n/proxmops/internal/auth"
 	"github.com/prop4n/proxmops/internal/config"
 	"github.com/prop4n/proxmops/internal/crypt"
+	"github.com/prop4n/proxmops/internal/logbuf"
 	"github.com/prop4n/proxmops/internal/manifest"
 	"github.com/prop4n/proxmops/internal/proxmox"
 	"github.com/prop4n/proxmops/internal/reconcile"
@@ -190,6 +191,11 @@ func deleteManaged(ctx context.Context, desired []manifest.Resource, del cluster
 }
 
 func (a *App) Run(ctx context.Context, addr string) error {
+	// Tee the daemon's logs into an in-memory ring buffer so the web UI can show
+	// a live tail; lines still go to the original handler (stdout).
+	logs := logbuf.New(1000)
+	a.log = slog.New(logs.Handler(a.log.Handler()))
+
 	st, err := store.Open(a.cfg.Server.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -217,6 +223,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 		Deleter:      a,
 		Detailer:     a,
 		Events:       st,
+		Logs:         logs,
 		CookieSecure: a.cfg.Server.CookieSecure,
 	}, a.log)
 
