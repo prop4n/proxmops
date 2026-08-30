@@ -107,6 +107,8 @@ export const api = {
   logout: () => request<null>('/logout', { method: 'POST' }),
   me: () => request<Account>('/me'),
   resources: () => request<StatusSnapshot>('/resources'),
+  deleteResource: (kind: string, name: string) =>
+    request<null>(`/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   getSettings: () => request<SettingsSnapshot>('/settings'),
   saveSettings: (settings: SettingsSnapshot) =>
     request<SettingsSnapshot>('/settings', {

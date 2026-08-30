@@ -15,6 +15,9 @@ import (
 // downloadTimeout bounds how long to wait for an ISO download task.
 const downloadTimeout = 30 * time.Minute
 
+// deleteTimeout bounds how long to wait for an ISO delete task.
+const deleteTimeout = 2 * time.Minute
+
 // isoContent is the Proxmox storage content type for ISO images.
 const isoContent = "iso"
 
@@ -121,6 +124,26 @@ func (c *PVE) DownloadISO(ctx context.Context, req IsoDownload) error {
 	}
 	if err := task.Wait(ctx, 2*time.Second, downloadTimeout); err != nil {
 		return fmt.Errorf("download %s: %w", req.Filename, err)
+	}
+	return nil
+}
+
+// DeleteISO removes an ISO from a storage and waits for the task to complete.
+func (c *PVE) DeleteISO(ctx context.Context, node, storageName, filename string) error {
+	storage, err := c.storage(ctx, node, storageName)
+	if err != nil {
+		return err
+	}
+	iso, err := storage.ISO(ctx, filename)
+	if err != nil {
+		return fmt.Errorf("get iso %s: %w", filename, err)
+	}
+	task, err := iso.Delete(ctx)
+	if err != nil {
+		return fmt.Errorf("delete %s: %w", filename, err)
+	}
+	if err := task.Wait(ctx, time.Second, deleteTimeout); err != nil {
+		return fmt.Errorf("delete %s: %w", filename, err)
 	}
 	return nil
 }

@@ -1,6 +1,10 @@
 package manifest
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+	"path"
+)
 
 // Iso is the desired state of an ISO image or template synced onto a storage.
 type Iso struct {
@@ -21,6 +25,16 @@ type IsoSpec struct {
 type Checksum struct {
 	Algo  string `yaml:"algo"`
 	Value string `yaml:"value"`
+}
+
+// Filename is the storage filename derived from the source URL, ignoring any
+// query string or fragment. It falls back to the raw base if the URL does not
+// parse.
+func (i Iso) Filename() string {
+	if u, err := url.Parse(i.Spec.Source); err == nil && u.Path != "" {
+		return path.Base(u.Path)
+	}
+	return path.Base(i.Spec.Source)
 }
 
 // GetTypeMeta implements Resource.

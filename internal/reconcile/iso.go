@@ -2,8 +2,6 @@ package reconcile
 
 import (
 	"context"
-	"net/url"
-	"path"
 	"slices"
 
 	"github.com/prop4n/proxmops/internal/manifest"
@@ -45,7 +43,7 @@ func (r *isoReconciler) Plan(ctx context.Context, desired []manifest.Resource) (
 			present[key] = names
 		}
 
-		filename := isoFilename(iso.Spec.Source)
+		filename := iso.Filename()
 		if slices.Contains(names, filename) {
 			continue
 		}
@@ -73,14 +71,4 @@ func (r *isoReconciler) Plan(ctx context.Context, desired []manifest.Resource) (
 type storageKey struct {
 	node    string
 	storage string
-}
-
-// isoFilename derives the storage filename from a source URL, ignoring any
-// query string or fragment. It falls back to the raw base if the URL does not
-// parse.
-func isoFilename(source string) string {
-	if u, err := url.Parse(source); err == nil && u.Path != "" {
-		return path.Base(u.Path)
-	}
-	return path.Base(source)
 }
