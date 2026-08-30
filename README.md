@@ -103,6 +103,7 @@ spec:
   vmid: 120
   cores: 2
   memory: 2048
+  cpu: x86-64-v2          # optional; defaults to the Proxmox default
   image:
     source: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
   disks:
