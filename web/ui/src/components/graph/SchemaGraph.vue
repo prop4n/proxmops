@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -21,7 +21,7 @@ const props = defineProps<{
 
 const driftOnly = ref(false)
 
-const { fitView } = useVueFlow()
+const { fitView, updateNodeData } = useVueFlow()
 
 function build() {
   return buildGraph({ resources: props.resources, source: props.source, driftOnly: driftOnly.value })
@@ -31,14 +31,18 @@ const initial = build()
 const nodes = ref(initial.nodes)
 const edges = ref(initial.edges)
 
-// Rebuild only when the shape changes, so drag positions survive snapshot pushes.
-const signature = computed(() => {
-  const rs = props.resources
-    .map(r => `${r.kind}/${r.name}:${r.state}`)
-    .sort()
-    .join('|')
-  return `${driftOnly.value}::${props.source?.configured ?? false}::${rs}`
-})
+// The structural key covers only what changes the graph's shape — which nodes
+// exist and the filter — never a resource's sync state. A plain state flip
+// (Synced ↔ OutOfSync) therefore updates node visuals in place, without a
+// relayout or a fitView that would jarringly re-zoom the canvas.
+function structuralKey(): string {
+  const visible = driftOnly.value
+    ? props.resources.filter(r => r.state === 'OutOfSync')
+    : props.resources
+  const keys = visible.map(r => `${r.kind}/${r.name}`).sort().join('|')
+  return `${driftOnly.value}::${props.source?.configured ?? false}::${keys}`
+}
+let lastStructural = structuralKey()
 
 // Capped below 1:1 so a small graph opens slightly zoomed out.
 const fitOptions = { padding: 0.25, maxZoom: 0.75 }
@@ -48,12 +52,25 @@ function minimapColor(node: { data?: { drifted?: boolean, resource?: ResourceSta
   return drifted ? '#f59e0b' : 'var(--muted-foreground)'
 }
 
-watch(signature, () => {
-  const next = build()
-  nodes.value = next.nodes
-  edges.value = next.edges
-  nextTick(() => fitView(fitOptions))
-})
+watch(
+  () => [props.resources, props.source, driftOnly.value],
+  () => {
+    const next = build()
+    const key = structuralKey()
+    if (key !== lastStructural) {
+      // Shape changed: relayout and refit.
+      lastStructural = key
+      nodes.value = next.nodes
+      edges.value = next.edges
+      nextTick(() => fitView(fitOptions))
+      return
+    }
+    // State-only change: patch data in place, keep positions and zoom.
+    for (const n of next.nodes) updateNodeData(n.id, n.data)
+    edges.value = next.edges
+  },
+  { deep: true },
+)
 </script>
 
 <template>
