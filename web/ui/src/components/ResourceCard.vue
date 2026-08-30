@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Check, Loader2, Trash2, X } from 'lucide-vue-next'
+import { Check, History, Loader2, Trash2, X } from 'lucide-vue-next'
 import StatusLed from '@/components/StatusLed.vue'
 import { kindOf } from '@/lib/kinds'
 import { formatAge } from '@/lib/utils'
-import { api, type ApiError, type ResourceStatus } from '@/lib/api'
+import { api, type ApiError, type ResourceEvent, type ResourceStatus } from '@/lib/api'
 
 // Resource tile with a left status stripe; shared by the cards view and graph.
 // A trash action deletes the resource from the cluster (ISO only for now); it
@@ -31,6 +31,32 @@ async function doDelete() {
   } finally {
     deleting.value = false
   }
+}
+
+// Resource history: loaded on first open of the timeline.
+const showHistory = ref(false)
+const events = ref<ResourceEvent[]>([])
+const loadingHistory = ref(false)
+
+async function toggleHistory() {
+  showHistory.value = !showHistory.value
+  if (showHistory.value && events.value.length === 0) {
+    loadingHistory.value = true
+    try {
+      events.value = await api.resourceEvents(props.resource.kind, props.resource.name)
+    } catch {
+      // Leave the timeline empty on error.
+    } finally {
+      loadingHistory.value = false
+    }
+  }
+}
+
+function eventLabel(e: ResourceEvent): string {
+  const when = formatAge(e.at)
+  const ago = when ? `${when} ago` : 'just now'
+  const detail = e.reason ? `${e.type}: ${e.reason}` : e.type
+  return e.commit ? `${detail} · ${e.commit.slice(0, 7)} · ${ago}` : `${detail} · ${ago}`
 }
 
 function age(r: ResourceStatus): string {
@@ -68,6 +94,19 @@ function action(r: ResourceStatus): string {
           <span class="truncate text-sm font-medium">{{ resource.name }}</span>
           <div class="flex items-center gap-1.5">
             <StatusLed :state="drifted ? 'drifted' : 'synced'" />
+
+            <!-- History toggle -->
+            <button
+              type="button"
+              title="History"
+              :class="[
+                'nodrag rounded p-0.5 transition hover:text-foreground focus-visible:opacity-100',
+                showHistory ? 'text-foreground' : 'text-muted-foreground opacity-0 group-hover:opacity-100',
+              ]"
+              @click="toggleHistory"
+            >
+              <History class="size-3.5" />
+            </button>
 
             <!-- Delete: two-step inline confirm -->
             <div v-if="confirming" class="nodrag flex items-center gap-0.5">
@@ -121,6 +160,31 @@ function action(r: ResourceStatus): string {
           {{ action(resource) }}
         </p>
         <p class="mt-1.5 text-xs text-muted-foreground">{{ age(resource) }}</p>
+
+        <!-- History timeline -->
+        <div v-if="showHistory" class="nodrag mt-2 border-t pt-2">
+          <p v-if="loadingHistory" class="text-xs text-muted-foreground">Loading history...</p>
+          <p v-else-if="events.length === 0" class="text-xs text-muted-foreground">No history yet.</p>
+          <ul v-else class="space-y-1">
+            <li
+              v-for="e in events"
+              :key="e.id"
+              class="flex items-center gap-1.5 text-xs text-muted-foreground"
+            >
+              <span
+                aria-hidden="true"
+                :class="[
+                  'size-1.5 shrink-0 rounded-full',
+                  e.type === 'failed' ? 'bg-destructive'
+                  : e.type === 'synced' ? 'bg-emerald-500'
+                  : e.type === 'drifted' ? 'bg-amber-500'
+                  : 'bg-muted-foreground/50',
+                ]"
+              />
+              <span class="truncate font-mono" :title="eventLabel(e)">{{ eventLabel(e) }}</span>
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
   </div>

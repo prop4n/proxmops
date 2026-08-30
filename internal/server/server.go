@@ -22,6 +22,7 @@ type Server struct {
 	status       *status.Store
 	settings     *settings.Service
 	deleter      ResourceDeleter
+	events       EventsReader
 	cookieSecure bool
 }
 
@@ -32,6 +33,7 @@ type Options struct {
 	Status       *status.Store
 	Settings     *settings.Service
 	Deleter      ResourceDeleter
+	Events       EventsReader
 	CookieSecure bool
 }
 
@@ -43,6 +45,7 @@ func New(opts Options, log *slog.Logger) *Server {
 		status:       opts.Status,
 		settings:     opts.Settings,
 		deleter:      opts.Deleter,
+		events:       opts.Events,
 		cookieSecure: opts.CookieSecure,
 	}
 	s.http = &http.Server{
