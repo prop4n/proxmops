@@ -23,9 +23,25 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 type App struct {
-	cfg config.Config
-	log *slog.Logger
-	set *settings.Service
+	cfg    config.Config
+	log    *slog.Logger
+	set    *settings.Service
+	events reconcile.EventSink
+}
+
+// eventSink adapts the store to reconcile.EventSink, recording resource history.
+type eventSink struct {
+	store *store.Store
+	log   *slog.Logger
+}
+
+func (s *eventSink) Record(ctx context.Context, e reconcile.Event) {
+	err := s.store.AppendEvent(ctx, store.ResourceEvent{
+		Kind: string(e.Kind), Name: e.Name, Type: e.Type, Reason: e.Reason, Commit: e.Commit,
+	})
+	if err != nil {
+		s.log.Error("record event", "err", err)
+	}
 }
 
 func New(cfg config.Config, log *slog.Logger) *App {
@@ -99,6 +115,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 		return fmt.Errorf("load encryption key: %w", err)
 	}
 	a.set = settings.New(st, key)
+	a.events = &eventSink{store: st, log: a.log}
 
 	authSvc := auth.New(st, a.log)
 	if err := authSvc.Init(ctx); err != nil {
@@ -112,6 +129,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 		Status:       statusStore,
 		Settings:     a.set,
 		Deleter:      a,
+		Events:       st,
 		CookieSecure: a.cfg.Server.CookieSecure,
 	}, a.log)
 
@@ -180,8 +198,10 @@ func (a *App) reconcileLoop(ctx context.Context, statusStore *status.Store) erro
 		if complete {
 			if dispatcher == nil {
 				dispatcher = reconcile.NewDispatcher(cfg.Reconcile.Concurrency, a.log)
+				dispatcher.SetEventSink(a.events)
 			}
 			engine := a.newEngine(cfg, statusStore)
+			engine.SetEventSink(a.events)
 			if err := engine.Scan(ctx, dispatcher); err != nil && !errors.Is(err, context.Canceled) {
 				a.log.Error("reconcile failed", "err", err)
 			}

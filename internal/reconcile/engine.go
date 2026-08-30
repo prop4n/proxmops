@@ -44,6 +44,7 @@ type Engine struct {
 	opts        Options
 	log         *slog.Logger
 	status      *status.Store
+	events      EventSink
 }
 
 // NewEngine wires an Engine from its collaborators. status may be nil (e.g. for
@@ -51,6 +52,10 @@ type Engine struct {
 func NewEngine(source Source, reconcilers []Reconciler, opts Options, log *slog.Logger, status *status.Store) *Engine {
 	return &Engine{source: source, reconcilers: reconcilers, opts: opts, log: log, status: status}
 }
+
+// SetEventSink attaches a sink for resource history events. Optional; nil means
+// no history is recorded.
+func (e *Engine) SetEventSink(s EventSink) { e.events = s }
 
 // computePlan loads the desired state and aggregates every reconciler's plan.
 func (e *Engine) computePlan(ctx context.Context) ([]manifest.Resource, Plan, error) {
@@ -90,6 +95,7 @@ func (e *Engine) Scan(ctx context.Context, d *Dispatcher) error {
 	if plan.Empty() || !e.opts.AutoSync {
 		return nil
 	}
+	commit := e.commit()
 	for _, a := range plan.Actions {
 		switch {
 		case a.Informational:
@@ -99,6 +105,7 @@ func (e *Engine) Scan(ctx context.Context, d *Dispatcher) error {
 		case e.opts.DryRun:
 			e.log.Info("dry-run", "action", a.String(), "reason", a.Reason)
 		default:
+			a.Commit = commit
 			d.Submit(ctx, a)
 		}
 	}
@@ -179,13 +186,45 @@ func (e *Engine) recordStatus(desired []manifest.Resource, plan Plan) {
 		resources = append(resources, res)
 	}
 
+	commit := e.commit()
 	e.status.Set(status.Snapshot{
 		UpdatedAt:  time.Now(),
 		InSync:     plan.Empty(),
 		Configured: true,
-		Commit:     e.commit(),
+		Commit:     commit,
 		Resources:  resources,
 	})
+
+	// History: record state transitions against the previous snapshot. A brand
+	// new resource is only logged when it starts OutOfSync, to avoid a burst of
+	// "synced" events for everything already in sync on boot.
+	if e.events == nil {
+		return
+	}
+	current := make(map[key]bool, len(resources))
+	for _, r := range resources {
+		k := key{manifest.Kind(r.Kind), r.Name}
+		current[k] = true
+		prev, existed := prevState[k]
+		switch {
+		case existed && prev != r.State && r.State == status.StateSynced:
+			e.record(Event{Kind: k.kind, Name: k.name, Type: EventSynced, Commit: commit})
+		case prev != r.State && r.State == status.StateOutOfSync:
+			e.record(Event{Kind: k.kind, Name: k.name, Type: EventDrifted, Reason: r.Reason, Commit: commit})
+		}
+	}
+	for k, prev := range prevState {
+		if _, ok := current[k]; !ok && prev != "" {
+			e.record(Event{Kind: k.kind, Name: k.name, Type: EventRemoved, Commit: commit})
+		}
+	}
+}
+
+// record forwards an event to the sink when one is attached.
+func (e *Engine) record(ev Event) {
+	if e.events != nil {
+		e.events.Record(context.Background(), ev)
+	}
 }
 
 // committer is implemented by sources that track a Git commit (the Git source);

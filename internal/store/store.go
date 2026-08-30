@@ -31,6 +31,19 @@ CREATE TABLE IF NOT EXISTS settings (
 	data       BLOB NOT NULL,
 	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS resource_events (
+	id      INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind    TEXT NOT NULL,
+	name    TEXT NOT NULL,
+	type    TEXT NOT NULL,
+	reason  TEXT NOT NULL DEFAULT '',
+	commit_ TEXT NOT NULL DEFAULT '',
+	at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_events_resource
+	ON resource_events (kind, name, id);
 `
 
 // Store is a handle to the application database.
