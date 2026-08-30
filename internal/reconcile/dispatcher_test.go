@@ -30,7 +30,7 @@ func TestDispatcherRunsInBackground(t *testing.T) {
 }
 
 // TestDispatcherSlowActionDoesNotBlockOthers is the regression: a slow action in
-// flight must not stop a different one from being started — the whole point of
+// flight must not stop a different one from being started - the whole point of
 // decoupling scanning from applying.
 func TestDispatcherSlowActionDoesNotBlockOthers(t *testing.T) {
 	d := NewDispatcher(4, testLogger())

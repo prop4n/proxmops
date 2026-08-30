@@ -33,7 +33,7 @@ defineProps<{ data: SourceNodeData }>()
       to="/settings"
       class="mt-2.5 block border-t pt-2.5 text-xs text-muted-foreground hover:text-foreground"
     >
-      Open settings to set it up →
+      Open settings to set it up
     </RouterLink>
   </div>
   <Handle type="source" :position="Position.Right" class="!border-border !bg-muted-foreground/40" />

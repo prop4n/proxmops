@@ -55,7 +55,7 @@ provisioning is being built. Concretely:
 - **Desired vs observed state.** The repo holds desired state. The Proxmox API
   reports observed state. proxmops computes the difference and closes the gap.
 - **Ownership by tag.** proxmops only manages guests it owns, marked with a
-  `managed-by:proxmops` tag. Anything it did not create is left alone.
+  `managed-by-proxmops` tag. Anything it did not create is left alone.
 - **Soft prune.** Inside the owned scope, removing a manifest from the repo
   removes the resource. Outside that scope, nothing is ever deleted — pre-existing,
   hand-made guests are never touched. Prune is opt-in.

@@ -21,7 +21,17 @@ type VirtualMachineSpec struct {
 	Net    []NIC      `yaml:"net,omitempty"`
 	ISO    string     `yaml:"iso,omitempty"`
 	State  PowerState `yaml:"state,omitempty"`
+	// ApplyMode controls how config changes that need a restart (cores, memory)
+	// are applied to a running VM. Empty reports "reboot required" and leaves the
+	// VM running; "reboot" lets proxmops restart the VM to apply them.
+	ApplyMode ApplyMode `yaml:"applyMode,omitempty"`
 }
+
+// ApplyMode selects how restart-requiring changes reach a running VM.
+type ApplyMode string
+
+// Recognised apply modes. The zero value reports drift without restarting.
+const ApplyModeReboot ApplyMode = "reboot"
 
 // Disk is a virtual disk backed by a storage.
 type Disk struct {

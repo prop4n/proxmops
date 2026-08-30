@@ -65,7 +65,7 @@ async function onSubmit() {
         </CardContent>
         <CardFooter class="mt-2">
           <Button type="submit" class="w-full" :disabled="busy">
-            {{ busy ? 'Creating…' : 'Create admin account' }}
+            {{ busy ? 'Creating...' : 'Create admin account' }}
           </Button>
         </CardFooter>
       </form>

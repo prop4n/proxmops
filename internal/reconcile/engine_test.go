@@ -132,7 +132,7 @@ func TestScanRecordsVMIDAndTransitions(t *testing.T) {
 	d := NewDispatcher(4, testLogger())
 	stateOf := func() status.Resource { return st.Get().Resources[0] }
 
-	// Pass 1: drift (create) — the state is stamped now.
+	// Pass 1: drift (create) - the state is stamped now.
 	rec.plan = Plan{Actions: []Action{{Type: ActionCreate, Kind: manifest.KindVirtualMachine, Name: "web-01"}}}
 	if err := eng.Scan(context.Background(), d); err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestScanRecordsVMIDAndTransitions(t *testing.T) {
 		t.Fatalf("pass 1 = %+v, want OutOfSync with a transition timestamp", first)
 	}
 
-	// Pass 2: drift resolved — a new transition timestamp is stamped.
+	// Pass 2: drift resolved - a new transition timestamp is stamped.
 	time.Sleep(2 * time.Millisecond)
 	rec.plan = Plan{}
 	if err := eng.Scan(context.Background(), d); err != nil {
@@ -159,7 +159,7 @@ func TestScanRecordsVMIDAndTransitions(t *testing.T) {
 		t.Fatalf("transition not re-stamped after state change: %v -> %v", first.LastTransition, second.LastTransition)
 	}
 
-	// Pass 3: still in sync — the timestamp is preserved, not reset.
+	// Pass 3: still in sync - the timestamp is preserved, not reset.
 	time.Sleep(2 * time.Millisecond)
 	if err := eng.Scan(context.Background(), d); err != nil {
 		t.Fatal(err)
