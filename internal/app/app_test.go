@@ -7,9 +7,64 @@ import (
 
 	"github.com/prop4n/proxmops/internal/config"
 	"github.com/prop4n/proxmops/internal/crypt"
+	"github.com/prop4n/proxmops/internal/manifest"
+	"github.com/prop4n/proxmops/internal/proxmox"
+	"github.com/prop4n/proxmops/internal/server"
 	"github.com/prop4n/proxmops/internal/settings"
 	"github.com/prop4n/proxmops/internal/store"
 )
+
+// fakeIsoStore records ISO deletions.
+type fakeIsoStore struct{ deleted []string }
+
+func (f *fakeIsoStore) ListISOs(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeIsoStore) DownloadISO(context.Context, proxmox.IsoDownload) error { return nil }
+func (f *fakeIsoStore) DeleteISO(_ context.Context, node, storage, filename string) error {
+	f.deleted = append(f.deleted, node+"/"+storage+"/"+filename)
+	return nil
+}
+
+func isoRes(name, src string) manifest.Iso {
+	return manifest.Iso{
+		TypeMeta: manifest.TypeMeta{APIVersion: manifest.APIVersion, Kind: manifest.KindIso},
+		Metadata: manifest.ObjectMeta{Name: name},
+		Spec:     manifest.IsoSpec{Source: src, Node: "pve", Storage: "local"},
+	}
+}
+
+func TestDeleteManagedDeletesISO(t *testing.T) {
+	store := &fakeIsoStore{}
+	desired := []manifest.Resource{isoRes("nix", "https://ex/path/nixos.iso?token=x")}
+
+	if err := deleteManaged(context.Background(), desired, store, "Iso", "nix"); err != nil {
+		t.Fatalf("deleteManaged: %v", err)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != "pve/local/nixos.iso" {
+		t.Fatalf("deleted = %v; want [pve/local/nixos.iso]", store.deleted)
+	}
+}
+
+func TestDeleteManagedNotFound(t *testing.T) {
+	desired := []manifest.Resource{isoRes("nix", "https://ex/nixos.iso")}
+	err := deleteManaged(context.Background(), desired, &fakeIsoStore{}, "Iso", "missing")
+	if !errors.Is(err, server.ErrResourceNotFound) {
+		t.Fatalf("err = %v; want ErrResourceNotFound", err)
+	}
+}
+
+func TestDeleteManagedUnsupportedKind(t *testing.T) {
+	vm := manifest.VirtualMachine{
+		TypeMeta: manifest.TypeMeta{APIVersion: manifest.APIVersion, Kind: manifest.KindVirtualMachine},
+		Metadata: manifest.ObjectMeta{Name: "web", Node: "pve"},
+		Spec:     manifest.VirtualMachineSpec{VMID: 100},
+	}
+	err := deleteManaged(context.Background(), []manifest.Resource{vm}, &fakeIsoStore{}, "VirtualMachine", "web")
+	if !errors.Is(err, server.ErrDeleteUnsupported) {
+		t.Fatalf("err = %v; want ErrDeleteUnsupported", err)
+	}
+}
 
 // In-memory settings.Repository; nil data means "not configured".
 type fakeRepo struct {

@@ -10,6 +10,7 @@ import (
 	"github.com/prop4n/proxmops/internal/auth"
 	"github.com/prop4n/proxmops/internal/config"
 	"github.com/prop4n/proxmops/internal/crypt"
+	"github.com/prop4n/proxmops/internal/manifest"
 	"github.com/prop4n/proxmops/internal/proxmox"
 	"github.com/prop4n/proxmops/internal/reconcile"
 	"github.com/prop4n/proxmops/internal/server"
@@ -37,6 +38,41 @@ func (a *App) Plan(ctx context.Context) (reconcile.Plan, error) {
 	return a.newEngine(a.cfg, nil).Plan(ctx)
 }
 
+// DeleteResource removes a single managed resource from the cluster. It resolves
+// the resource from the desired state, so a delete only ever targets something
+// the repo declares; the resource reappears on the next reconcile if still
+// declared. Implements server.ResourceDeleter.
+func (a *App) DeleteResource(ctx context.Context, kind, name string) error {
+	cfg, err := a.effectiveConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if !cfg.Complete() {
+		return server.ErrResourceNotFound
+	}
+	desired, err := source.New(cfg.Source).Desired(ctx)
+	if err != nil {
+		return err
+	}
+	return deleteManaged(ctx, desired, proxmox.New(cfg.Cluster), kind, name)
+}
+
+// deleteManaged finds the desired resource by kind and name and deletes it. Only
+// ISO deletion is supported for now; other kinds return ErrDeleteUnsupported.
+func deleteManaged(ctx context.Context, desired []manifest.Resource, isos proxmox.IsoStore, kind, name string) error {
+	for _, res := range desired {
+		if string(res.GetTypeMeta().Kind) != kind || res.GetObjectMeta().Name != name {
+			continue
+		}
+		iso, ok := res.(manifest.Iso)
+		if !ok {
+			return server.ErrDeleteUnsupported
+		}
+		return isos.DeleteISO(ctx, iso.Spec.Node, iso.Spec.Storage, iso.Filename())
+	}
+	return server.ErrResourceNotFound
+}
+
 func (a *App) Run(ctx context.Context, addr string) error {
 	st, err := store.Open(a.cfg.Server.DatabasePath)
 	if err != nil {
@@ -61,6 +97,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 		Auth:         authSvc,
 		Status:       statusStore,
 		Settings:     a.set,
+		Deleter:      a,
 		CookieSecure: a.cfg.Server.CookieSecure,
 	}, a.log)
 

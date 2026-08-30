@@ -23,6 +23,8 @@ func (f *fakeIsoStore) DownloadISO(_ context.Context, req proxmox.IsoDownload) e
 	return nil
 }
 
+func (f *fakeIsoStore) DeleteISO(_ context.Context, _, _, _ string) error { return nil }
+
 func isoResource(name, source string) manifest.Iso {
 	return manifest.Iso{
 		TypeMeta: manifest.TypeMeta{APIVersion: manifest.APIVersion, Kind: manifest.KindIso},

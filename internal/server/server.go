@@ -21,6 +21,7 @@ type Server struct {
 	auth         *auth.Service
 	status       *status.Store
 	settings     *settings.Service
+	deleter      ResourceDeleter
 	cookieSecure bool
 }
 
@@ -30,6 +31,7 @@ type Options struct {
 	Auth         *auth.Service
 	Status       *status.Store
 	Settings     *settings.Service
+	Deleter      ResourceDeleter
 	CookieSecure bool
 }
 
@@ -40,6 +42,7 @@ func New(opts Options, log *slog.Logger) *Server {
 		auth:         opts.Auth,
 		status:       opts.Status,
 		settings:     opts.Settings,
+		deleter:      opts.Deleter,
 		cookieSecure: opts.CookieSecure,
 	}
 	s.http = &http.Server{

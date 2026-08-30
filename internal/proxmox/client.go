@@ -72,4 +72,6 @@ type IsoStore interface {
 	ListISOs(ctx context.Context, node, storage string) ([]string, error)
 	// DownloadISO fetches an ISO onto a storage, verifying its checksum.
 	DownloadISO(ctx context.Context, req IsoDownload) error
+	// DeleteISO removes an ISO file from node/storage.
+	DeleteISO(ctx context.Context, node, storage, filename string) error
 }
