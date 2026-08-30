@@ -225,11 +225,16 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 		return fmt.Errorf("import disk for vm %d: %w", spec.VMID, err)
 	}
 
-	// Cloud-init drive, boot order, and settings.
+	// Cloud-init drive, boot order, and settings. Cloud images boot with
+	// console=ttyS0, so a serial device is required or init dies early; ostype
+	// l26 sets the right Linux defaults.
 	ci := spec.CloudInit
 	opts := []pve.VirtualMachineOption{
 		{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"},
 		{Name: "boot", Value: "order=scsi0"},
+		{Name: "serial0", Value: "socket"},
+		{Name: "vga", Value: "serial0"},
+		{Name: "ostype", Value: "l26"},
 	}
 	if ci != nil {
 		if ci.User != "" {
