@@ -10,7 +10,7 @@ const source: SettingsSnapshot = {
   configured: true,
   cluster: { endpoint: '', tokenId: '', tokenSecret: '', tokenSecretSet: false, insecureSkipVerify: false },
   source: { repoURL: 'https://example/repo', path: '', revision: 'main', username: '', token: '', tokenSet: false },
-  reconcile: { intervalSeconds: 60, autoSync: false, prune: false, dryRun: false },
+  reconcile: { intervalSeconds: 60, autoSync: false, prune: false, dryRun: false, concurrency: 4 },
 }
 
 function build(resources: ResourceStatus[], driftOnly = false) {
