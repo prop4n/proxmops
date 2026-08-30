@@ -2,14 +2,17 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/prop4n/proxmops/internal/manifest"
 	"github.com/prop4n/proxmops/internal/proxmox"
 )
 
-// guestReconciler reconciles QEMU guests and LXC containers using tag-based
-// ownership: only guests carrying proxmox.ManagedTag are updated or deleted, so
-// hand-made guests are left untouched.
+// guestReconciler reconciles QEMU VMs using tag-based ownership: only guests
+// carrying proxmox.ManagedTag are updated or deleted, so hand-made guests are
+// left untouched. Increment 1 covers VirtualMachine create/update/delete;
+// containers are handled in a later phase.
 type guestReconciler struct {
 	store proxmox.GuestStore
 }
@@ -19,53 +22,73 @@ func NewGuestReconciler(store proxmox.GuestStore) Reconciler {
 	return &guestReconciler{store: store}
 }
 
-// Plan diffs desired guests against the cluster within the owned scope.
+// Plan diffs desired VMs against the cluster within the owned scope.
 func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource) (Plan, error) {
-	want := filterKinds(desired, manifest.KindVirtualMachine, manifest.KindContainer)
+	want := filterKinds(desired, manifest.KindVirtualMachine)
 
 	observed, err := g.store.ListGuests(ctx)
 	if err != nil {
 		return Plan{}, err
 	}
 
-	desiredByKey := make(map[objectKey]proxmox.Object, len(want))
-	order := make([]objectKey, 0, len(want))
+	// Guests are keyed by VMID, their stable Proxmox identity. Matching by name
+	// would misfire right after a create, when the cluster resource cache still
+	// reports an empty name for a few seconds, causing a spurious re-create.
+	desiredByVMID := make(map[int]manifest.VirtualMachine, len(want))
+	order := make([]int, 0, len(want))
 	for _, r := range want {
-		obj := desiredObject(r)
-		k := keyOf(obj)
-		desiredByKey[k] = obj
-		order = append(order, k)
+		vm, ok := r.(manifest.VirtualMachine)
+		if !ok {
+			continue
+		}
+		desiredByVMID[vm.Spec.VMID] = vm
+		order = append(order, vm.Spec.VMID)
 	}
 
-	observedByKey := make(map[objectKey]proxmox.Object, len(observed))
+	observedByVMID := make(map[int]proxmox.Object, len(observed))
 	for _, o := range observed {
-		observedByKey[keyOf(o)] = o
+		if o.Kind == proxmox.KindVirtualMachine {
+			observedByVMID[o.VMID] = o
+		}
 	}
 
 	var plan Plan
 
-	// Creates, in manifest order. A present guest is treated as in sync for
-	// now; spec comparison arrives with the VM phase.
-	for _, k := range order {
-		if _, ok := observedByKey[k]; ok {
+	// Creates and updates, in manifest order.
+	for _, vmid := range order {
+		vm := desiredByVMID[vmid]
+		obs, present := observedByVMID[vmid]
+		if !present {
+			spec := desiredSpec(vm)
+			plan.Actions = append(plan.Actions, Action{
+				Type:   ActionCreate,
+				Kind:   manifest.KindVirtualMachine,
+				Name:   vm.Metadata.Name,
+				Reason: "not present in cluster",
+				Apply:  func(ctx context.Context) error { return g.store.CreateGuest(ctx, spec) },
+			})
 			continue
 		}
-		obj := desiredByKey[k]
-		plan.Actions = append(plan.Actions, Action{
-			Type:   ActionCreate,
-			Kind:   manifest.Kind(obj.Kind),
-			Name:   obj.Name,
-			Reason: "not present in cluster",
-			Apply:  func(ctx context.Context) error { return g.store.CreateGuest(ctx, obj) },
-		})
+		// An owned, present VM may have drifted on safe fields.
+		if obs.Owned() {
+			if reason, upd, drifted := guestDrift(vm, obs); drifted {
+				plan.Actions = append(plan.Actions, Action{
+					Type:   ActionUpdate,
+					Kind:   manifest.KindVirtualMachine,
+					Name:   vm.Metadata.Name,
+					Reason: reason,
+					Apply:  func(ctx context.Context) error { return g.store.UpdateGuest(ctx, upd) },
+				})
+			}
+		}
 	}
 
-	// Deletes: owned guests absent from the desired set.
+	// Deletes: owned VMs absent from the desired set.
 	for _, o := range observed {
-		if !o.Owned() {
+		if o.Kind != proxmox.KindVirtualMachine || !o.Owned() {
 			continue
 		}
-		if _, ok := desiredByKey[keyOf(o)]; ok {
+		if _, ok := desiredByVMID[o.VMID]; ok {
 			continue
 		}
 		plan.Actions = append(plan.Actions, Action{
@@ -80,26 +103,66 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 	return plan, nil
 }
 
-// objectKey uniquely identifies a guest across the desired and observed sets.
-type objectKey struct {
-	kind proxmox.Kind
-	name string
-}
-
-func keyOf(o proxmox.Object) objectKey {
-	return objectKey{kind: o.Kind, name: o.Name}
-}
-
-// desiredObject projects a manifest guest onto the observed-state shape, adding
-// the ownership tag that a created guest must carry.
-func desiredObject(r manifest.Resource) proxmox.Object {
-	om := r.GetObjectMeta()
-	tags := append([]string{}, om.Tags...)
-	tags = append(tags, proxmox.ManagedTag)
-	return proxmox.Object{
-		Kind: proxmox.Kind(r.GetTypeMeta().Kind),
-		Name: om.Name,
-		Node: om.Node,
-		Tags: tags,
+// guestDrift compares the safe, non-destructive fields (cores, memory, power
+// state) of a desired VM against the observed one. It returns a human reason,
+// the update to apply, and whether anything drifted. Disk and NIC differences
+// are out of scope for this increment and are not reported here.
+func guestDrift(vm manifest.VirtualMachine, obs proxmox.Object) (string, proxmox.GuestUpdate, bool) {
+	// Only manage fields the manifest actually declares: unspecified cores or
+	// memory (0) and an unset power state are left as observed, so a partial
+	// manifest never fights Proxmox defaults.
+	upd := proxmox.GuestUpdate{Node: obs.Node, VMID: obs.VMID, Cores: obs.Cores, MemoryMB: obs.MemoryMB, Running: obs.Running}
+	var reasons []string
+	if vm.Spec.Cores > 0 && vm.Spec.Cores != obs.Cores {
+		reasons = append(reasons, fmt.Sprintf("cores %d→%d", obs.Cores, vm.Spec.Cores))
+		upd.Cores = vm.Spec.Cores
 	}
+	if vm.Spec.Memory > 0 && vm.Spec.Memory != obs.MemoryMB {
+		reasons = append(reasons, fmt.Sprintf("memory %d→%d MB", obs.MemoryMB, vm.Spec.Memory))
+		upd.MemoryMB = vm.Spec.Memory
+	}
+	if vm.Spec.State != "" {
+		wantRunning := vm.Spec.State == manifest.StateRunning
+		if wantRunning != obs.Running {
+			reasons = append(reasons, fmt.Sprintf("state %s→%s", powerWord(obs.Running), powerWord(wantRunning)))
+			upd.Running = wantRunning
+		}
+	}
+	if len(reasons) == 0 {
+		return "", proxmox.GuestUpdate{}, false
+	}
+	return strings.Join(reasons, ", "), upd, true
+}
+
+func powerWord(running bool) string {
+	if running {
+		return "running"
+	}
+	return "stopped"
+}
+
+// desiredSpec projects a manifest VM onto the flat create spec, adding the
+// ownership tag the created guest must carry.
+func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
+	tags := append([]string{}, vm.Metadata.Tags...)
+	tags = append(tags, proxmox.ManagedTag)
+
+	spec := proxmox.GuestSpec{
+		Kind:     proxmox.KindVirtualMachine,
+		Node:     vm.Metadata.Node,
+		VMID:     vm.Spec.VMID,
+		Name:     vm.Metadata.Name,
+		Cores:    vm.Spec.Cores,
+		MemoryMB: vm.Spec.Memory,
+		ISO:      vm.Spec.ISO,
+		Running:  vm.Spec.State == manifest.StateRunning,
+		Tags:     tags,
+	}
+	if len(vm.Spec.Disks) > 0 {
+		spec.Disk = proxmox.GuestDisk{Storage: vm.Spec.Disks[0].Storage, Size: vm.Spec.Disks[0].Size}
+	}
+	if len(vm.Spec.Net) > 0 {
+		spec.NIC = proxmox.GuestNIC{Bridge: vm.Spec.Net[0].Bridge, Model: vm.Spec.Net[0].Model}
+	}
+	return spec
 }

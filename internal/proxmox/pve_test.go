@@ -14,7 +14,7 @@ func TestParseTags(t *testing.T) {
 		{"prod", []string{"prod"}},
 		{"prod;web", []string{"prod", "web"}},
 		{" prod ; ; web ", []string{"prod", "web"}},
-		{"managed-by:proxmops;prod", []string{"managed-by:proxmops", "prod"}},
+		{"managed-by-proxmops;prod", []string{"managed-by-proxmops", "prod"}},
 	}
 	for _, tt := range tests {
 		if got := parseTags(tt.in); !slices.Equal(got, tt.want) {

@@ -18,6 +18,9 @@ const downloadTimeout = 30 * time.Minute
 // deleteTimeout bounds how long to wait for an ISO delete task.
 const deleteTimeout = 2 * time.Minute
 
+// guestTimeout bounds how long to wait for a VM create/config/power/delete task.
+const guestTimeout = 5 * time.Minute
+
 // isoContent is the Proxmox storage content type for ISO images.
 const isoContent = "iso"
 
@@ -70,21 +73,153 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 			continue
 		}
 		objects = append(objects, Object{
-			Kind: kind,
-			Name: r.Name,
-			Node: r.Node,
-			ID:   r.ID,
-			Tags: parseTags(r.Tags),
+			Kind:     kind,
+			Name:     r.Name,
+			Node:     r.Node,
+			ID:       r.ID,
+			VMID:     int(r.VMID),
+			Cores:    int(r.MaxCPU),
+			MemoryMB: int(r.MaxMem / (1024 * 1024)),
+			Running:  r.Status == "running",
+			Tags:     parseTags(r.Tags),
 		})
 	}
 	return objects, nil
 }
 
-// CreateGuest is not implemented yet; guest provisioning lands with the VM phase.
-func (c *PVE) CreateGuest(context.Context, Object) error { return ErrNotImplemented }
+// CreateGuest provisions a QEMU VM from spec, tags it, and starts it when
+// requested. Container creation is not built yet.
+func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
+	if spec.Kind != KindVirtualMachine {
+		return ErrNotImplemented
+	}
+	node, err := c.api.Node(ctx, spec.Node)
+	if err != nil {
+		return fmt.Errorf("get node %s: %w", spec.Node, err)
+	}
 
-// DeleteGuest is not implemented yet; guest deletion lands with the VM phase.
-func (c *PVE) DeleteGuest(context.Context, Object) error { return ErrNotImplemented }
+	opts := []pve.VirtualMachineOption{
+		{Name: "name", Value: spec.Name},
+		{Name: "cores", Value: spec.Cores},
+		{Name: "memory", Value: spec.MemoryMB},
+		{Name: "scsihw", Value: "virtio-scsi-single"},
+	}
+	if spec.Disk.Storage != "" {
+		opts = append(opts, pve.VirtualMachineOption{
+			Name:  "scsi0",
+			Value: fmt.Sprintf("%s:%d", spec.Disk.Storage, parseSizeGB(spec.Disk.Size)),
+		})
+	}
+	if spec.NIC.Bridge != "" {
+		model := spec.NIC.Model
+		if model == "" {
+			model = "virtio"
+		}
+		opts = append(opts, pve.VirtualMachineOption{
+			Name:  "net0",
+			Value: fmt.Sprintf("%s,bridge=%s", model, spec.NIC.Bridge),
+		})
+	}
+	if len(spec.Tags) > 0 {
+		opts = append(opts, pve.VirtualMachineOption{Name: "tags", Value: strings.Join(spec.Tags, ";")})
+	}
+
+	task, err := node.NewVirtualMachine(ctx, spec.VMID, opts...)
+	if err != nil {
+		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
+	}
+	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
+	}
+
+	if spec.Running {
+		return c.setPower(ctx, spec.Node, spec.VMID, true)
+	}
+	return nil
+}
+
+// DeleteGuest stops a VM proxmops owns, then destroys it and its disks.
+func (c *PVE) DeleteGuest(ctx context.Context, obj Object) error {
+	if obj.Kind != KindVirtualMachine {
+		return ErrNotImplemented
+	}
+	vm, err := c.vm(ctx, obj.Node, obj.VMID)
+	if err != nil {
+		return err
+	}
+	if vm.IsRunning() {
+		if err := c.setPower(ctx, obj.Node, obj.VMID, false); err != nil {
+			return err
+		}
+	}
+	task, err := vm.Delete(ctx, &pve.VirtualMachineDeleteOptions{Purge: true, DestroyUnreferencedDisks: true})
+	if err != nil {
+		return fmt.Errorf("delete vm %d: %w", obj.VMID, err)
+	}
+	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+		return fmt.Errorf("delete vm %d: %w", obj.VMID, err)
+	}
+	return nil
+}
+
+// UpdateGuest applies safe drift corrections (cores, memory) and reconciles the
+// power state.
+func (c *PVE) UpdateGuest(ctx context.Context, upd GuestUpdate) error {
+	vm, err := c.vm(ctx, upd.Node, upd.VMID)
+	if err != nil {
+		return err
+	}
+	task, err := vm.Config(ctx,
+		pve.VirtualMachineOption{Name: "cores", Value: upd.Cores},
+		pve.VirtualMachineOption{Name: "memory", Value: upd.MemoryMB},
+	)
+	if err != nil {
+		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
+	}
+	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
+	}
+	if upd.Running != vm.IsRunning() {
+		return c.setPower(ctx, upd.Node, upd.VMID, upd.Running)
+	}
+	return nil
+}
+
+// vm resolves a VirtualMachine handle by node and vmid.
+func (c *PVE) vm(ctx context.Context, node string, vmid int) (*pve.VirtualMachine, error) {
+	n, err := c.api.Node(ctx, node)
+	if err != nil {
+		return nil, fmt.Errorf("get node %s: %w", node, err)
+	}
+	vm, err := n.VirtualMachine(ctx, vmid)
+	if err != nil {
+		return nil, fmt.Errorf("get vm %d: %w", vmid, err)
+	}
+	return vm, nil
+}
+
+// setPower starts or stops a VM and waits for the task.
+func (c *PVE) setPower(ctx context.Context, node string, vmid int, running bool) error {
+	vm, err := c.vm(ctx, node, vmid)
+	if err != nil {
+		return err
+	}
+	var task *pve.Task
+	verb := "start"
+	if running {
+		task, err = vm.Start(ctx)
+	} else {
+		verb = "stop"
+		task, err = vm.Stop(ctx)
+	}
+	if err != nil {
+		return fmt.Errorf("%s vm %d: %w", verb, vmid, err)
+	}
+	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+		return fmt.Errorf("%s vm %d: %w", verb, vmid, err)
+	}
+	return nil
+}
 
 // ListISOs returns the filenames of the ISOs present on node/storage.
 func (c *PVE) ListISOs(ctx context.Context, node, storageName string) ([]string, error) {
@@ -159,6 +294,23 @@ func (c *PVE) storage(ctx context.Context, node, name string) (*pve.Storage, err
 		return nil, fmt.Errorf("get storage %s on %s: %w", name, node, err)
 	}
 	return s, nil
+}
+
+// parseSizeGB reads a leading integer from a disk size such as "40G" or "40GB"
+// and returns it as gibibytes. It falls back to a small default when the value
+// is empty or unparseable, so a create never asks Proxmox for a 0-sized disk.
+func parseSizeGB(size string) int {
+	n := 0
+	for _, r := range size {
+		if r < '0' || r > '9' {
+			break
+		}
+		n = n*10 + int(r-'0')
+	}
+	if n <= 0 {
+		return 8
+	}
+	return n
 }
 
 // kindFromType maps a Proxmox cluster resource type to a proxmops Kind.
