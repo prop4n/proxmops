@@ -42,9 +42,15 @@ type Object struct {
 	VMID          int
 	Cores         int
 	MemoryMB      int
+	CPU           string
 	Running       bool
 	RebootPending bool
 	Tags          []string
+	// Observed cloud-init scalars (from VM config), for drift detection.
+	CIUser       string
+	IP           string
+	Nameserver   string
+	SearchDomain string
 }
 
 // Owned reports whether the object carries the proxmops ownership tag.
@@ -73,11 +79,33 @@ type GuestSpec struct {
 	Name     string
 	Cores    int
 	MemoryMB int
+	CPU      string
 	Disk     GuestDisk
 	NIC      GuestNIC
 	ISO      string
 	Running  bool
 	Tags     []string
+	// Image, when set, provisions the disk from a cloud image and enables
+	// cloud-init instead of creating a blank VM.
+	Image     *GuestImage
+	CloudInit *GuestCloudInit
+}
+
+// GuestImage is a cloud image to import as the VM disk.
+type GuestImage struct {
+	Source        string
+	Filename      string
+	ImportStorage string
+}
+
+// GuestCloudInit holds the cloud-init settings for a VM.
+type GuestCloudInit struct {
+	User         string
+	Password     string
+	SSHKeys      []string
+	IP           string
+	Nameserver   string
+	SearchDomain string
 }
 
 // GuestUpdate carries the safe, non-destructive drift corrections applied to an
@@ -87,7 +115,13 @@ type GuestUpdate struct {
 	VMID     int
 	Cores    int
 	MemoryMB int
+	CPU      string
 	Running  bool
+	// Cloud-init scalars to set when they drift; empty values are left untouched.
+	CIUser       string
+	IP           string
+	Nameserver   string
+	SearchDomain string
 }
 
 // GuestStore reads and mutates QEMU guests and LXC containers. Ownership is

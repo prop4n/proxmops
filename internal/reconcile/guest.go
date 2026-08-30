@@ -135,11 +135,35 @@ func guestDrift(vm manifest.VirtualMachine, obs proxmox.Object) (string, proxmox
 	// Only manage fields the manifest actually declares: unspecified cores or
 	// memory (0) and an unset power state are left as observed, so a partial
 	// manifest never fights Proxmox defaults.
-	upd := proxmox.GuestUpdate{Node: obs.Node, VMID: obs.VMID, Cores: obs.Cores, MemoryMB: obs.MemoryMB, Running: obs.Running}
+	upd := proxmox.GuestUpdate{Node: obs.Node, VMID: obs.VMID, Cores: obs.Cores, MemoryMB: obs.MemoryMB, CPU: obs.CPU, Running: obs.Running}
 	var reasons []string
 	if vm.Spec.Cores > 0 && vm.Spec.Cores != obs.Cores {
 		reasons = append(reasons, fmt.Sprintf("cores %d->%d", obs.Cores, vm.Spec.Cores))
 		upd.Cores = vm.Spec.Cores
+	}
+	if vm.Spec.CPU != "" && vm.Spec.CPU != obs.CPU {
+		reasons = append(reasons, fmt.Sprintf("cpu %s->%s", obs.CPU, vm.Spec.CPU))
+		upd.CPU = vm.Spec.CPU
+	}
+	if ci := vm.Spec.CloudInit; ci != nil {
+		if ci.User != "" && ci.User != obs.CIUser {
+			reasons = append(reasons, fmt.Sprintf("ci-user %s->%s", obs.CIUser, ci.User))
+			upd.CIUser = ci.User
+		}
+		// Proxmox stores ipconfig as "ip=..."; normalise the desired value so a
+		// bare "dhcp" doesn't read as perpetual drift against "ip=dhcp".
+		if wantIP := normalizeIP(ci.IP); ci.IP != "" && wantIP != obs.IP {
+			reasons = append(reasons, fmt.Sprintf("ip %s->%s", obs.IP, wantIP))
+			upd.IP = wantIP
+		}
+		if ci.Nameserver != "" && ci.Nameserver != obs.Nameserver {
+			reasons = append(reasons, fmt.Sprintf("nameserver %s->%s", obs.Nameserver, ci.Nameserver))
+			upd.Nameserver = ci.Nameserver
+		}
+		if ci.SearchDomain != "" && ci.SearchDomain != obs.SearchDomain {
+			reasons = append(reasons, fmt.Sprintf("searchdomain %s->%s", obs.SearchDomain, ci.SearchDomain))
+			upd.SearchDomain = ci.SearchDomain
+		}
 	}
 	if vm.Spec.Memory > 0 && vm.Spec.Memory != obs.MemoryMB {
 		reasons = append(reasons, fmt.Sprintf("memory %d->%d MB", obs.MemoryMB, vm.Spec.Memory))
@@ -156,6 +180,15 @@ func guestDrift(vm manifest.VirtualMachine, obs proxmox.Object) (string, proxmox
 		return "", proxmox.GuestUpdate{}, false
 	}
 	return strings.Join(reasons, ", "), upd, true
+}
+
+// normalizeIP mirrors Proxmox's ipconfig form: a bare mode like "dhcp" becomes
+// "ip=dhcp"; a full "ip=...,gw=..." is left as is.
+func normalizeIP(ip string) string {
+	if ip != "" && !strings.Contains(ip, "=") {
+		return "ip=" + ip
+	}
+	return ip
 }
 
 func powerWord(running bool) string {
@@ -178,6 +211,7 @@ func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
 		Name:     vm.Metadata.Name,
 		Cores:    vm.Spec.Cores,
 		MemoryMB: vm.Spec.Memory,
+		CPU:      vm.Spec.CPU,
 		ISO:      vm.Spec.ISO,
 		Running:  vm.Spec.State == manifest.StateRunning,
 		Tags:     tags,
@@ -187,6 +221,23 @@ func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
 	}
 	if len(vm.Spec.Net) > 0 {
 		spec.NIC = proxmox.GuestNIC{Bridge: vm.Spec.Net[0].Bridge, Model: vm.Spec.Net[0].Model}
+	}
+	if vm.Spec.Image != nil {
+		spec.Image = &proxmox.GuestImage{
+			Source:        vm.Spec.Image.Source,
+			Filename:      vm.Spec.Image.Filename(),
+			ImportStorage: vm.Spec.Image.ImportStorage,
+		}
+	}
+	if ci := vm.Spec.CloudInit; ci != nil {
+		spec.CloudInit = &proxmox.GuestCloudInit{
+			User:         ci.User,
+			Password:     ci.Password,
+			SSHKeys:      ci.SSHKeys,
+			IP:           ci.IP,
+			Nameserver:   ci.Nameserver,
+			SearchDomain: ci.SearchDomain,
+		}
 	}
 	return spec
 }

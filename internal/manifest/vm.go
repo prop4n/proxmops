@@ -1,6 +1,10 @@
 package manifest
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+	"path"
+)
 
 // VirtualMachine is the desired state of a QEMU guest.
 type VirtualMachine struct {
@@ -14,17 +18,45 @@ func (vm VirtualMachine) GetVMID() int { return vm.Spec.VMID }
 
 // VirtualMachineSpec describes the configuration of a QEMU guest.
 type VirtualMachineSpec struct {
-	VMID   int        `yaml:"vmid"`
-	Cores  int        `yaml:"cores"`
-	Memory int        `yaml:"memory"`
-	Disks  []Disk     `yaml:"disks,omitempty"`
-	Net    []NIC      `yaml:"net,omitempty"`
-	ISO    string     `yaml:"iso,omitempty"`
-	State  PowerState `yaml:"state,omitempty"`
+	VMID   int `yaml:"vmid"`
+	Cores  int `yaml:"cores"`
+	Memory int `yaml:"memory"`
+	// CPU is the processor type (e.g. "x86-64-v2", "host"). Empty keeps the
+	// Proxmox default.
+	CPU   string     `yaml:"cpu,omitempty"`
+	Disks []Disk     `yaml:"disks,omitempty"`
+	Net   []NIC      `yaml:"net,omitempty"`
+	ISO   string     `yaml:"iso,omitempty"`
+	State PowerState `yaml:"state,omitempty"`
+	// Image, when set, provisions the VM from a cloud image instead of a blank
+	// disk, enabling cloud-init.
+	Image *Image `yaml:"image,omitempty"`
+	// CloudInit configures the cloud-init drive; only meaningful with Image.
+	CloudInit *CloudInit `yaml:"cloudInit,omitempty"`
 	// ApplyMode controls how config changes that need a restart (cores, memory)
 	// are applied to a running VM. Empty reports "reboot required" and leaves the
 	// VM running; "reboot" lets proxmops restart the VM to apply them.
 	ApplyMode ApplyMode `yaml:"applyMode,omitempty"`
+}
+
+// Image is a cloud image the VM disk is imported from.
+type Image struct {
+	// Source is the URL of the cloud image (.qcow2/.img).
+	Source string `yaml:"source"`
+	// ImportStorage is the directory storage (with the "import" content type)
+	// the image is downloaded to. Empty auto-selects one.
+	ImportStorage string `yaml:"importStorage,omitempty"`
+}
+
+// CloudInit holds the cloud-init settings injected into the VM.
+type CloudInit struct {
+	User     string   `yaml:"user,omitempty"`
+	Password string   `yaml:"password,omitempty"`
+	SSHKeys  []string `yaml:"sshKeys,omitempty"`
+	// IP is a Proxmox ipconfig0 value: "dhcp" or "ip=10.0.0.5/24,gw=10.0.0.1".
+	IP           string `yaml:"ip,omitempty"`
+	Nameserver   string `yaml:"nameserver,omitempty"`
+	SearchDomain string `yaml:"searchDomain,omitempty"`
 }
 
 // ApplyMode selects how restart-requiring changes reach a running VM.
@@ -74,5 +106,20 @@ func (vm VirtualMachine) Validate() error {
 	if vm.Spec.VMID <= 0 {
 		return fmt.Errorf("spec.vmid must be positive")
 	}
+	if vm.Spec.Image != nil && vm.Spec.Image.Source == "" {
+		return fmt.Errorf("spec.image.source is required when image is set")
+	}
+	if vm.Spec.CloudInit != nil && vm.Spec.Image == nil {
+		return fmt.Errorf("spec.cloudInit requires spec.image")
+	}
 	return nil
+}
+
+// Filename derives the storage filename from the image source URL, ignoring any
+// query string. Falls back to the raw base when the URL does not parse.
+func (i Image) Filename() string {
+	if u, err := url.Parse(i.Source); err == nil && u.Path != "" {
+		return path.Base(u.Path)
+	}
+	return path.Base(i.Source)
 }

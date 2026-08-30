@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,9 +88,10 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 		liveCores, liveMemMB := int(r.MaxCPU), int(r.MaxMem/(1024*1024))
 		o.Cores, o.MemoryMB = liveCores, liveMemMB
 		if kind == KindVirtualMachine {
-			if cfgCores, cfgMemMB, err := c.vmConfig(ctx, r.Node, int(r.VMID)); err == nil {
-				o.Cores, o.MemoryMB = cfgCores, cfgMemMB
-				o.RebootPending = o.Running && (cfgCores != liveCores || cfgMemMB != liveMemMB)
+			if cfg, err := c.vmConfig(ctx, r.Node, int(r.VMID)); err == nil {
+				o.Cores, o.MemoryMB, o.CPU = cfg.cores, cfg.memMB, cfg.cpu
+				o.CIUser, o.IP, o.Nameserver, o.SearchDomain = cfg.ciUser, cfg.ip, cfg.nameserver, cfg.searchDomain
+				o.RebootPending = o.Running && (cfg.cores != liveCores || cfg.memMB != liveMemMB)
 			}
 		}
 		objects = append(objects, o)
@@ -97,15 +99,34 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 	return objects, nil
 }
 
-// vmConfig reads a VM's configured total vCPUs (sockets×cores) and memory in MB.
-func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (int, int, error) {
+// vmObservedConfig is a VM's configured values relevant to drift.
+type vmObservedConfig struct {
+	cores        int
+	memMB        int
+	cpu          string
+	ciUser       string
+	ip           string
+	nameserver   string
+	searchDomain string
+}
+
+// vmConfig reads the VM config values proxmops reconciles: cpu/cores/memory and
+// the cloud-init scalars.
+func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (vmObservedConfig, error) {
 	vm, err := c.vm(ctx, node, vmid)
 	if err != nil {
-		return 0, 0, err
+		return vmObservedConfig{}, err
 	}
 	cfg := vm.VirtualMachineConfig
-	cores := derefOr(cfg.Cores, 1) * derefOr(cfg.Sockets, 1)
-	return cores, int(cfg.Memory), nil
+	return vmObservedConfig{
+		cores:        derefOr(cfg.Cores, 1) * derefOr(cfg.Sockets, 1),
+		memMB:        int(cfg.Memory),
+		cpu:          cfg.CPU,
+		ciUser:       cfg.CIUser,
+		ip:           cfg.IPConfigs["ipconfig0"],
+		nameserver:   cfg.Nameserver,
+		searchDomain: cfg.Searchdomain,
+	}, nil
 }
 
 // derefOr returns *p, or def when p is nil or zero.
@@ -133,7 +154,12 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 		{Name: "memory", Value: spec.MemoryMB},
 		{Name: "scsihw", Value: "virtio-scsi-single"},
 	}
-	if spec.Disk.Storage != "" {
+	if spec.CPU != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "cpu", Value: spec.CPU})
+	}
+	// A blank disk is created inline; an image-backed disk is imported after
+	// create (it needs the VM to exist first).
+	if spec.Image == nil && spec.Disk.Storage != "" {
 		opts = append(opts, pve.VirtualMachineOption{
 			Name:  "scsi0",
 			Value: fmt.Sprintf("%s:%d", spec.Disk.Storage, parseSizeGB(spec.Disk.Size)),
@@ -161,8 +187,148 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
 	}
 
+	if spec.Image != nil {
+		if err := c.provisionCloudImage(ctx, node, spec); err != nil {
+			return err
+		}
+	}
+
 	if spec.Running {
 		return c.setPower(ctx, spec.Node, spec.VMID, true)
+	}
+	return nil
+}
+
+// provisionCloudImage imports the cloud image as scsi0, adds the cloud-init
+// drive, applies the cloud-init settings, and resizes the disk if requested. The
+// VM must already exist. This path is API-only, so it works on or off the node.
+func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec GuestSpec) error {
+	if spec.Disk.Storage == "" {
+		return fmt.Errorf("vm %d: disks[0].storage is required for a cloud image", spec.VMID)
+	}
+	importStorage, err := c.resolveImportStorage(ctx, node, spec.Image.ImportStorage)
+	if err != nil {
+		return err
+	}
+	if err := c.downloadImport(ctx, node, importStorage, spec.Image.Filename, spec.Image.Source); err != nil {
+		return err
+	}
+
+	vm, err := node.VirtualMachine(ctx, spec.VMID)
+	if err != nil {
+		return fmt.Errorf("get vm %d: %w", spec.VMID, err)
+	}
+
+	// Import the image as scsi0.
+	importFrom := fmt.Sprintf("%s:0,import-from=%s:import/%s", spec.Disk.Storage, importStorage, spec.Image.Filename)
+	if err := c.configWait(ctx, vm, pve.VirtualMachineOption{Name: "scsi0", Value: importFrom}); err != nil {
+		return fmt.Errorf("import disk for vm %d: %w", spec.VMID, err)
+	}
+
+	// Cloud-init drive, boot order, and settings. Cloud images boot with
+	// console=ttyS0, so a serial device is required or init dies early; ostype
+	// l26 sets the right Linux defaults.
+	ci := spec.CloudInit
+	opts := []pve.VirtualMachineOption{
+		{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"},
+		{Name: "boot", Value: "order=scsi0"},
+		{Name: "serial0", Value: "socket"},
+		{Name: "vga", Value: "serial0"},
+		{Name: "ostype", Value: "l26"},
+	}
+	if ci != nil {
+		if ci.User != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: ci.User})
+		}
+		if ci.Password != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "cipassword", Value: ci.Password})
+		}
+		if len(ci.SSHKeys) > 0 {
+			opts = append(opts, pve.VirtualMachineOption{Name: "sshkeys", Value: pve.EncodeSSHKeys(ci.SSHKeys...)})
+		}
+		if ci.IP != "" {
+			// Proxmox wants key=value ("ip=dhcp"); accept a bare mode like "dhcp".
+			ip := ci.IP
+			if !strings.Contains(ip, "=") {
+				ip = "ip=" + ip
+			}
+			opts = append(opts, pve.VirtualMachineOption{Name: "ipconfig0", Value: ip})
+		}
+		if ci.Nameserver != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "nameserver", Value: ci.Nameserver})
+		}
+		if ci.SearchDomain != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "searchdomain", Value: ci.SearchDomain})
+		}
+	}
+	if err := c.configWait(ctx, vm, opts...); err != nil {
+		return fmt.Errorf("cloud-init config for vm %d: %w", spec.VMID, err)
+	}
+
+	// Grow the imported disk if a larger size is requested. Proxmox refuses to
+	// shrink, so a smaller value surfaces as an error rather than data loss.
+	if spec.Disk.Size != "" {
+		task, err := vm.ResizeDisk(ctx, "scsi0", spec.Disk.Size)
+		if err != nil {
+			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		}
+		if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		}
+	}
+	return nil
+}
+
+// configWait applies config options and waits for the resulting task.
+func (c *PVE) configWait(ctx context.Context, vm *pve.VirtualMachine, opts ...pve.VirtualMachineOption) error {
+	task, err := vm.Config(ctx, opts...)
+	if err != nil {
+		return err
+	}
+	return task.Wait(ctx, time.Second, guestTimeout)
+}
+
+// resolveImportStorage returns the requested import storage, or the first one on
+// the node advertising the "import" content type.
+func (c *PVE) resolveImportStorage(ctx context.Context, node *pve.Node, want string) (string, error) {
+	if want != "" {
+		return want, nil
+	}
+	storages, err := node.Storages(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list storages: %w", err)
+	}
+	for _, s := range storages {
+		if slices.Contains(strings.Split(s.Content, ","), "import") {
+			return s.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no storage with the 'import' content type; set spec.image.importStorage")
+}
+
+// downloadImport fetches the cloud image into the import storage unless it is
+// already present, so re-creating a VM does not re-download.
+func (c *PVE) downloadImport(ctx context.Context, node *pve.Node, storageName, filename, url string) error {
+	storage, err := node.Storage(ctx, storageName)
+	if err != nil {
+		return fmt.Errorf("get storage %s: %w", storageName, err)
+	}
+	content, err := storage.GetContent(ctx)
+	if err != nil {
+		return fmt.Errorf("get content of %s: %w", storageName, err)
+	}
+	want := storageName + ":import/" + filename
+	for _, item := range content {
+		if item.Volid == want {
+			return nil // already downloaded
+		}
+	}
+	task, err := storage.DownloadURL(ctx, "import", filename, url)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", filename, err)
+	}
+	if err := task.Wait(ctx, 2*time.Second, downloadTimeout); err != nil {
+		return fmt.Errorf("download %s: %w", filename, err)
 	}
 	return nil
 }
@@ -198,10 +364,26 @@ func (c *PVE) UpdateGuest(ctx context.Context, upd GuestUpdate) error {
 	if err != nil {
 		return err
 	}
-	task, err := vm.Config(ctx,
-		pve.VirtualMachineOption{Name: "cores", Value: upd.Cores},
-		pve.VirtualMachineOption{Name: "memory", Value: upd.MemoryMB},
-	)
+	opts := []pve.VirtualMachineOption{
+		{Name: "cores", Value: upd.Cores},
+		{Name: "memory", Value: upd.MemoryMB},
+	}
+	if upd.CPU != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "cpu", Value: upd.CPU})
+	}
+	if upd.CIUser != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: upd.CIUser})
+	}
+	if upd.IP != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ipconfig0", Value: upd.IP})
+	}
+	if upd.Nameserver != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "nameserver", Value: upd.Nameserver})
+	}
+	if upd.SearchDomain != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "searchdomain", Value: upd.SearchDomain})
+	}
+	task, err := vm.Config(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
 	}
