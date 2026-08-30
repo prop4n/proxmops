@@ -184,7 +184,7 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 	if err != nil {
 		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
 	}
 
@@ -284,7 +284,7 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 		if err != nil {
 			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
 		}
-		if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+		if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
 		}
 	}
@@ -311,8 +311,26 @@ func (c *PVE) ConvertToTemplate(ctx context.Context, node string, vmid int) erro
 	if err != nil {
 		return fmt.Errorf("convert vm %d to template: %w", vmid, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("convert vm %d to template: %w", vmid, err)
+	}
+	return nil
+}
+
+// waitTask waits for a Proxmox task and turns a failed exit status into an
+// error. The SDK's task.Wait returns nil as soon as the task stops running, even
+// when it failed (e.g. a download 404), so the exit status must be checked or a
+// failed operation looks successful.
+func waitTask(ctx context.Context, task *pve.Task, interval, timeout time.Duration) error {
+	if err := task.Wait(ctx, interval, timeout); err != nil {
+		return err
+	}
+	if !task.IsSuccessful {
+		status := task.ExitStatus
+		if status == "" {
+			status = "unknown error"
+		}
+		return fmt.Errorf("task %s: %s", task.UPID, status)
 	}
 	return nil
 }
@@ -323,7 +341,7 @@ func (c *PVE) configWait(ctx context.Context, vm *pve.VirtualMachine, opts ...pv
 	if err != nil {
 		return err
 	}
-	return task.Wait(ctx, time.Second, guestTimeout)
+	return waitTask(ctx, task, time.Second, guestTimeout)
 }
 
 // resolveImportStorage returns the requested import storage, or the first one on
@@ -365,7 +383,7 @@ func (c *PVE) downloadImport(ctx context.Context, node *pve.Node, storageName, f
 	if err != nil {
 		return fmt.Errorf("download %s: %w", filename, err)
 	}
-	if err := task.Wait(ctx, 2*time.Second, downloadTimeout); err != nil {
+	if err := waitTask(ctx, task, 2*time.Second, downloadTimeout); err != nil {
 		return fmt.Errorf("download %s: %w", filename, err)
 	}
 	return nil
@@ -389,7 +407,7 @@ func (c *PVE) DeleteGuest(ctx context.Context, obj Object) error {
 	if err != nil {
 		return fmt.Errorf("delete vm %d: %w", obj.VMID, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("delete vm %d: %w", obj.VMID, err)
 	}
 	return nil
@@ -425,7 +443,7 @@ func (c *PVE) UpdateGuest(ctx context.Context, upd GuestUpdate) error {
 	if err != nil {
 		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
 	}
 	if upd.Running != vm.IsRunning() {
@@ -474,7 +492,7 @@ func (c *PVE) setPower(ctx context.Context, node string, vmid int, running bool)
 	if err != nil {
 		return fmt.Errorf("%s vm %d: %w", verb, vmid, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("%s vm %d: %w", verb, vmid, err)
 	}
 	return nil
@@ -516,7 +534,7 @@ func (c *PVE) DownloadISO(ctx context.Context, req IsoDownload) error {
 	if err != nil {
 		return fmt.Errorf("download %s: %w", req.Filename, err)
 	}
-	if err := task.Wait(ctx, 2*time.Second, downloadTimeout); err != nil {
+	if err := waitTask(ctx, task, 2*time.Second, downloadTimeout); err != nil {
 		return fmt.Errorf("download %s: %w", req.Filename, err)
 	}
 	return nil
@@ -536,7 +554,7 @@ func (c *PVE) DeleteISO(ctx context.Context, node, storageName, filename string)
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", filename, err)
 	}
-	if err := task.Wait(ctx, time.Second, deleteTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, deleteTimeout); err != nil {
 		return fmt.Errorf("delete %s: %w", filename, err)
 	}
 	return nil
