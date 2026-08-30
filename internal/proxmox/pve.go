@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -133,7 +134,9 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 		{Name: "memory", Value: spec.MemoryMB},
 		{Name: "scsihw", Value: "virtio-scsi-single"},
 	}
-	if spec.Disk.Storage != "" {
+	// A blank disk is created inline; an image-backed disk is imported after
+	// create (it needs the VM to exist first).
+	if spec.Image == nil && spec.Disk.Storage != "" {
 		opts = append(opts, pve.VirtualMachineOption{
 			Name:  "scsi0",
 			Value: fmt.Sprintf("%s:%d", spec.Disk.Storage, parseSizeGB(spec.Disk.Size)),
@@ -161,8 +164,143 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
 	}
 
+	if spec.Image != nil {
+		if err := c.provisionCloudImage(ctx, node, spec); err != nil {
+			return err
+		}
+	}
+
 	if spec.Running {
 		return c.setPower(ctx, spec.Node, spec.VMID, true)
+	}
+	return nil
+}
+
+// provisionCloudImage imports the cloud image as scsi0, adds the cloud-init
+// drive, applies the cloud-init settings, and resizes the disk if requested. The
+// VM must already exist. This path is API-only, so it works on or off the node.
+func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec GuestSpec) error {
+	if spec.Disk.Storage == "" {
+		return fmt.Errorf("vm %d: disks[0].storage is required for a cloud image", spec.VMID)
+	}
+	importStorage, err := c.resolveImportStorage(ctx, node, spec.Image.ImportStorage)
+	if err != nil {
+		return err
+	}
+	if err := c.downloadImport(ctx, node, importStorage, spec.Image.Filename, spec.Image.Source); err != nil {
+		return err
+	}
+
+	vm, err := node.VirtualMachine(ctx, spec.VMID)
+	if err != nil {
+		return fmt.Errorf("get vm %d: %w", spec.VMID, err)
+	}
+
+	// Import the image as scsi0.
+	importFrom := fmt.Sprintf("%s:0,import-from=%s:import/%s", spec.Disk.Storage, importStorage, spec.Image.Filename)
+	if err := c.configWait(ctx, vm, pve.VirtualMachineOption{Name: "scsi0", Value: importFrom}); err != nil {
+		return fmt.Errorf("import disk for vm %d: %w", spec.VMID, err)
+	}
+
+	// Cloud-init drive, boot order, and settings.
+	ci := spec.CloudInit
+	opts := []pve.VirtualMachineOption{
+		{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"},
+		{Name: "boot", Value: "order=scsi0"},
+	}
+	if ci != nil {
+		if ci.User != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: ci.User})
+		}
+		if ci.Password != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "cipassword", Value: ci.Password})
+		}
+		if len(ci.SSHKeys) > 0 {
+			opts = append(opts, pve.VirtualMachineOption{Name: "sshkeys", Value: pve.EncodeSSHKeys(ci.SSHKeys...)})
+		}
+		if ci.IP != "" {
+			// Proxmox wants key=value ("ip=dhcp"); accept a bare mode like "dhcp".
+			ip := ci.IP
+			if !strings.Contains(ip, "=") {
+				ip = "ip=" + ip
+			}
+			opts = append(opts, pve.VirtualMachineOption{Name: "ipconfig0", Value: ip})
+		}
+		if ci.Nameserver != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "nameserver", Value: ci.Nameserver})
+		}
+		if ci.SearchDomain != "" {
+			opts = append(opts, pve.VirtualMachineOption{Name: "searchdomain", Value: ci.SearchDomain})
+		}
+	}
+	if err := c.configWait(ctx, vm, opts...); err != nil {
+		return fmt.Errorf("cloud-init config for vm %d: %w", spec.VMID, err)
+	}
+
+	// Grow the imported disk if a larger size is requested. Proxmox refuses to
+	// shrink, so a smaller value surfaces as an error rather than data loss.
+	if spec.Disk.Size != "" {
+		task, err := vm.ResizeDisk(ctx, "scsi0", spec.Disk.Size)
+		if err != nil {
+			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		}
+		if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		}
+	}
+	return nil
+}
+
+// configWait applies config options and waits for the resulting task.
+func (c *PVE) configWait(ctx context.Context, vm *pve.VirtualMachine, opts ...pve.VirtualMachineOption) error {
+	task, err := vm.Config(ctx, opts...)
+	if err != nil {
+		return err
+	}
+	return task.Wait(ctx, time.Second, guestTimeout)
+}
+
+// resolveImportStorage returns the requested import storage, or the first one on
+// the node advertising the "import" content type.
+func (c *PVE) resolveImportStorage(ctx context.Context, node *pve.Node, want string) (string, error) {
+	if want != "" {
+		return want, nil
+	}
+	storages, err := node.Storages(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list storages: %w", err)
+	}
+	for _, s := range storages {
+		if slices.Contains(strings.Split(s.Content, ","), "import") {
+			return s.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no storage with the 'import' content type; set spec.image.importStorage")
+}
+
+// downloadImport fetches the cloud image into the import storage unless it is
+// already present, so re-creating a VM does not re-download.
+func (c *PVE) downloadImport(ctx context.Context, node *pve.Node, storageName, filename, url string) error {
+	storage, err := node.Storage(ctx, storageName)
+	if err != nil {
+		return fmt.Errorf("get storage %s: %w", storageName, err)
+	}
+	content, err := storage.GetContent(ctx)
+	if err != nil {
+		return fmt.Errorf("get content of %s: %w", storageName, err)
+	}
+	want := storageName + ":import/" + filename
+	for _, item := range content {
+		if item.Volid == want {
+			return nil // already downloaded
+		}
+	}
+	task, err := storage.DownloadURL(ctx, "import", filename, url)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", filename, err)
+	}
+	if err := task.Wait(ctx, 2*time.Second, downloadTimeout); err != nil {
+		return fmt.Errorf("download %s: %w", filename, err)
 	}
 	return nil
 }

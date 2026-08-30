@@ -188,5 +188,22 @@ func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
 	if len(vm.Spec.Net) > 0 {
 		spec.NIC = proxmox.GuestNIC{Bridge: vm.Spec.Net[0].Bridge, Model: vm.Spec.Net[0].Model}
 	}
+	if vm.Spec.Image != nil {
+		spec.Image = &proxmox.GuestImage{
+			Source:        vm.Spec.Image.Source,
+			Filename:      vm.Spec.Image.Filename(),
+			ImportStorage: vm.Spec.Image.ImportStorage,
+		}
+	}
+	if ci := vm.Spec.CloudInit; ci != nil {
+		spec.CloudInit = &proxmox.GuestCloudInit{
+			User:         ci.User,
+			Password:     ci.Password,
+			SSHKeys:      ci.SSHKeys,
+			IP:           ci.IP,
+			Nameserver:   ci.Nameserver,
+			SearchDomain: ci.SearchDomain,
+		}
+	}
 	return spec
 }

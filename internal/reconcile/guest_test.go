@@ -89,6 +89,32 @@ func TestGuestCreateCarriesManagedTag(t *testing.T) {
 	}
 }
 
+func TestGuestCreateCarriesCloudInit(t *testing.T) {
+	store := &fakeGuestStore{}
+	vm := vmResource("web-01")
+	vm.Spec.Disks = []manifest.Disk{{Storage: "local-lvm", Size: "20G"}}
+	vm.Spec.Image = &manifest.Image{Source: "https://ex/d/debian-12.qcow2"}
+	vm.Spec.CloudInit = &manifest.CloudInit{User: "debian", SSHKeys: []string{"ssh-ed25519 AAAA"}, IP: "dhcp"}
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.created) != 1 {
+		t.Fatalf("want one create, got %d", len(store.created))
+	}
+	got := store.created[0]
+	if got.Image == nil || got.Image.Filename != "debian-12.qcow2" {
+		t.Fatalf("image not propagated: %+v", got.Image)
+	}
+	if got.CloudInit == nil || got.CloudInit.User != "debian" || got.CloudInit.IP != "dhcp" {
+		t.Fatalf("cloud-init not propagated: %+v", got.CloudInit)
+	}
+	if len(got.CloudInit.SSHKeys) != 1 {
+		t.Errorf("ssh keys not propagated: %+v", got.CloudInit.SSHKeys)
+	}
+}
+
 func TestGuestUpdatesDriftedConfig(t *testing.T) {
 	// Owned VM present with 1 core / 512MB; the manifest wants 4 cores / 2048MB.
 	obs := ownedGuest("web-01")

@@ -90,6 +90,35 @@ spec:
   state: running
 ```
 
+A cloud-init VM built from a cloud image (`.qcow2`/`.raw`/`.vmdk`). proxmops
+downloads the image, imports it as the disk, and injects the cloud-init settings:
+
+```yaml
+apiVersion: proxmops.dev/v1
+kind: VirtualMachine
+metadata:
+  name: app-01
+  node: pve-node1
+spec:
+  vmid: 120
+  cores: 2
+  memory: 2048
+  image:
+    source: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+  disks:
+    - storage: local-lvm
+      size: 20G            # grows the imported disk
+  net:
+    - bridge: vmbr0
+  cloudInit:
+    user: debian
+    sshKeys:
+      - ssh-ed25519 AAAA...
+    ip: dhcp               # or "ip=10.0.0.5/24,gw=10.0.0.1"
+    nameserver: 1.1.1.1
+  state: running
+```
+
 An LXC container:
 
 ```yaml

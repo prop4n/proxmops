@@ -78,6 +78,27 @@ type GuestSpec struct {
 	ISO      string
 	Running  bool
 	Tags     []string
+	// Image, when set, provisions the disk from a cloud image and enables
+	// cloud-init instead of creating a blank VM.
+	Image     *GuestImage
+	CloudInit *GuestCloudInit
+}
+
+// GuestImage is a cloud image to import as the VM disk.
+type GuestImage struct {
+	Source        string
+	Filename      string
+	ImportStorage string
+}
+
+// GuestCloudInit holds the cloud-init settings for a VM.
+type GuestCloudInit struct {
+	User         string
+	Password     string
+	SSHKeys      []string
+	IP           string
+	Nameserver   string
+	SearchDomain string
 }
 
 // GuestUpdate carries the safe, non-destructive drift corrections applied to an
