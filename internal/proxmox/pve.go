@@ -74,13 +74,14 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 			continue
 		}
 		o := Object{
-			Kind:    kind,
-			Name:    r.Name,
-			Node:    r.Node,
-			ID:      r.ID,
-			VMID:    int(r.VMID),
-			Running: r.Status == "running",
-			Tags:    parseTags(r.Tags),
+			Kind:       kind,
+			Name:       r.Name,
+			Node:       r.Node,
+			ID:         r.ID,
+			VMID:       int(r.VMID),
+			Running:    r.Status == "running",
+			IsTemplate: r.Template == 1,
+			Tags:       parseTags(r.Tags),
 		}
 		// Configured cores/memory come from the VM config (authoritative for
 		// drift); the cluster listing only carries the live, running values.
@@ -206,12 +207,21 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 	if spec.Disk.Storage == "" {
 		return fmt.Errorf("vm %d: disks[0].storage is required for a cloud image", spec.VMID)
 	}
-	importStorage, err := c.resolveImportStorage(ctx, node, spec.Image.ImportStorage)
-	if err != nil {
-		return err
-	}
-	if err := c.downloadImport(ctx, node, importStorage, spec.Image.Filename, spec.Image.Source); err != nil {
-		return err
+
+	// The image is either a remote URL (download to an import storage first) or a
+	// reference to a volume already on a storage (use it directly).
+	var importVolume string
+	if isVolumeRef(spec.Image.Source) {
+		importVolume = spec.Image.Source
+	} else {
+		importStorage, err := c.resolveImportStorage(ctx, node, spec.Image.ImportStorage)
+		if err != nil {
+			return err
+		}
+		if err := c.downloadImport(ctx, node, importStorage, spec.Image.Filename, spec.Image.Source); err != nil {
+			return err
+		}
+		importVolume = importStorage + ":import/" + spec.Image.Filename
 	}
 
 	vm, err := node.VirtualMachine(ctx, spec.VMID)
@@ -220,22 +230,24 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 	}
 
 	// Import the image as scsi0.
-	importFrom := fmt.Sprintf("%s:0,import-from=%s:import/%s", spec.Disk.Storage, importStorage, spec.Image.Filename)
+	importFrom := fmt.Sprintf("%s:0,import-from=%s", spec.Disk.Storage, importVolume)
 	if err := c.configWait(ctx, vm, pve.VirtualMachineOption{Name: "scsi0", Value: importFrom}); err != nil {
 		return fmt.Errorf("import disk for vm %d: %w", spec.VMID, err)
 	}
 
-	// Cloud-init drive, boot order, and settings. Cloud images boot with
-	// console=ttyS0, so a serial device is required or init dies early; ostype
-	// l26 sets the right Linux defaults.
-	ci := spec.CloudInit
+	// Boot order + serial console. Cloud images boot with console=ttyS0, so a
+	// serial device is required or init dies early; ostype l26 sets the right
+	// Linux defaults. A template is bare: no cloud-init drive.
 	opts := []pve.VirtualMachineOption{
-		{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"},
 		{Name: "boot", Value: "order=scsi0"},
 		{Name: "serial0", Value: "socket"},
 		{Name: "vga", Value: "serial0"},
 		{Name: "ostype", Value: "l26"},
 	}
+	if !spec.AsTemplate {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"})
+	}
+	ci := spec.CloudInit
 	if ci != nil {
 		if ci.User != "" {
 			opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: ci.User})
@@ -275,6 +287,32 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 		if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
 			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
 		}
+	}
+	return nil
+}
+
+// isVolumeRef reports whether an image source is an existing Proxmox volume
+// (e.g. "local:import/debian.qcow2") rather than a URL to download.
+func isVolumeRef(source string) bool {
+	return !strings.Contains(source, "://")
+}
+
+// ConvertToTemplate turns a built VM into a template. It is idempotent: a VM
+// that is already a template is left as is.
+func (c *PVE) ConvertToTemplate(ctx context.Context, node string, vmid int) error {
+	vm, err := c.vm(ctx, node, vmid)
+	if err != nil {
+		return err
+	}
+	if vm.Template {
+		return nil
+	}
+	task, err := vm.ConvertToTemplate(ctx)
+	if err != nil {
+		return fmt.Errorf("convert vm %d to template: %w", vmid, err)
+	}
+	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+		return fmt.Errorf("convert vm %d to template: %w", vmid, err)
 	}
 	return nil
 }

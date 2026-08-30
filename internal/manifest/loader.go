@@ -87,6 +87,8 @@ func decodeNode(node *yaml.Node) (Resource, error) {
 		return decodeInto[Iso](node)
 	case KindNetwork:
 		return decodeInto[Network](node)
+	case KindTemplate:
+		return decodeInto[Template](node)
 	case "":
 		return nil, fmt.Errorf("missing kind")
 	default:

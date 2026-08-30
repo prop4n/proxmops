@@ -17,6 +17,7 @@ const (
 	KindContainer      Kind = "Container"
 	KindIso            Kind = "Iso"
 	KindNetwork        Kind = "Network"
+	KindTemplate       Kind = "Template"
 )
 
 // TypeMeta describes the schema version and kind of a manifest. It is embedded

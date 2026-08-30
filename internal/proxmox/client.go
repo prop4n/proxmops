@@ -45,6 +45,7 @@ type Object struct {
 	CPU           string
 	Running       bool
 	RebootPending bool
+	IsTemplate    bool
 	Tags          []string
 	// Observed cloud-init scalars (from VM config), for drift detection.
 	CIUser       string
@@ -89,6 +90,8 @@ type GuestSpec struct {
 	// cloud-init instead of creating a blank VM.
 	Image     *GuestImage
 	CloudInit *GuestCloudInit
+	// AsTemplate builds a bare template: no cloud-init drive, never started.
+	AsTemplate bool
 }
 
 // GuestImage is a cloud image to import as the VM disk.
@@ -137,6 +140,8 @@ type GuestStore interface {
 	UpdateGuest(ctx context.Context, upd GuestUpdate) error
 	// RebootGuest restarts a VM to apply pending config changes.
 	RebootGuest(ctx context.Context, node string, vmid int) error
+	// ConvertToTemplate turns a built VM into a template (idempotent).
+	ConvertToTemplate(ctx context.Context, node string, vmid int) error
 }
 
 // IsoDownload describes an ISO to fetch onto a storage.
