@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/prop4n/proxmops/internal/auth"
 	"github.com/prop4n/proxmops/internal/config"
@@ -73,6 +76,89 @@ func (a *App) DeleteResource(ctx context.Context, kind, name string) error {
 	return deleteManaged(ctx, desired, proxmox.New(cfg.Cluster), kind, name)
 }
 
+// ResourceDetail returns the desired manifest (as YAML) and best-effort observed
+// cluster state for one resource. Implements server.ResourceDetailer.
+func (a *App) ResourceDetail(ctx context.Context, kind, name string) (server.ResourceDetail, error) {
+	cfg, err := a.effectiveConfig(ctx)
+	if err != nil {
+		return server.ResourceDetail{}, err
+	}
+	if !cfg.Complete() {
+		return server.ResourceDetail{}, server.ErrResourceNotFound
+	}
+	desired, err := source.New(cfg.Source).Desired(ctx)
+	if err != nil {
+		return server.ResourceDetail{}, err
+	}
+
+	var res manifest.Resource
+	for _, r := range desired {
+		if string(r.GetTypeMeta().Kind) == kind && r.GetObjectMeta().Name == name {
+			res = r
+			break
+		}
+	}
+	if res == nil {
+		return server.ResourceDetail{}, server.ErrResourceNotFound
+	}
+
+	yml, err := yaml.Marshal(res)
+	if err != nil {
+		return server.ResourceDetail{}, fmt.Errorf("marshal manifest: %w", err)
+	}
+	detail := server.ResourceDetail{DesiredYAML: string(yml)}
+	detail.Observed = observeResource(ctx, proxmox.New(cfg.Cluster), res)
+	return detail, nil
+}
+
+// clusterObserver is the subset of the Proxmox client used to read observed state.
+type clusterObserver interface {
+	ListGuests(ctx context.Context) ([]proxmox.Object, error)
+	ListISOs(ctx context.Context, node, storage string) ([]string, error)
+}
+
+// observeResource reads the resource's actual state from the cluster, best-effort
+// (nil when it cannot be determined). Guests are matched by vmid, ISOs by
+// presence on their storage.
+func observeResource(ctx context.Context, cl clusterObserver, res manifest.Resource) *server.ObservedResource {
+	switch r := res.(type) {
+	case manifest.VirtualMachine:
+		return observeGuest(ctx, cl, r.Spec.VMID)
+	case manifest.Template:
+		return observeGuest(ctx, cl, r.Spec.VMID)
+	case manifest.Iso:
+		names, err := cl.ListISOs(ctx, r.Spec.Node, r.Spec.Storage)
+		if err != nil {
+			return nil
+		}
+		return &server.ObservedResource{Present: slices.Contains(names, r.Filename())}
+	default:
+		return nil
+	}
+}
+
+// observeGuest finds a guest by vmid and projects its observed config.
+func observeGuest(ctx context.Context, cl clusterObserver, vmid int) *server.ObservedResource {
+	guests, err := cl.ListGuests(ctx)
+	if err != nil {
+		return nil
+	}
+	for _, o := range guests {
+		if o.VMID == vmid {
+			return &server.ObservedResource{
+				Present:    true,
+				Cores:      o.Cores,
+				MemoryMB:   o.MemoryMB,
+				CPU:        o.CPU,
+				Running:    o.Running,
+				IP:         o.IP,
+				Nameserver: o.Nameserver,
+			}
+		}
+	}
+	return &server.ObservedResource{Present: false}
+}
+
 // clusterDeleter is the subset of the Proxmox client that deletes resources.
 type clusterDeleter interface {
 	DeleteISO(ctx context.Context, node, storage, filename string) error
@@ -129,6 +215,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 		Status:       statusStore,
 		Settings:     a.set,
 		Deleter:      a,
+		Detailer:     a,
 		Events:       st,
 		CookieSecure: a.cfg.Server.CookieSecure,
 	}, a.log)
