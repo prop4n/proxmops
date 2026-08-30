@@ -4,6 +4,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { LayoutDashboard, LogOut, Settings2 } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import StatusLed from '@/components/StatusLed.vue'
+import ResourceDetail from '@/components/ResourceDetail.vue'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/stores/auth'
 import { useSync } from '@/stores/sync'
@@ -118,5 +119,7 @@ async function onLogout() {
         <RouterView />
       </div>
     </main>
+
+    <ResourceDetail />
   </div>
 </template>

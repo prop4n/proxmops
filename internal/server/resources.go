@@ -21,6 +21,29 @@ type ResourceDeleter interface {
 	DeleteResource(ctx context.Context, kind, name string) error
 }
 
+// ResourceDetail is the desired manifest plus best-effort observed cluster state
+// for one resource.
+type ResourceDetail struct {
+	DesiredYAML string            `json:"desiredYAML"`
+	Observed    *ObservedResource `json:"observed,omitempty"`
+}
+
+// ObservedResource is the resource's actual state on the cluster.
+type ObservedResource struct {
+	Present    bool   `json:"present"`
+	Cores      int    `json:"cores,omitempty"`
+	MemoryMB   int    `json:"memoryMB,omitempty"`
+	CPU        string `json:"cpu,omitempty"`
+	Running    bool   `json:"running,omitempty"`
+	IP         string `json:"ip,omitempty"`
+	Nameserver string `json:"nameserver,omitempty"`
+}
+
+// ResourceDetailer returns the desired manifest and observed state of a resource.
+type ResourceDetailer interface {
+	ResourceDetail(ctx context.Context, kind, name string) (ResourceDetail, error)
+}
+
 var (
 	// ErrResourceNotFound is returned when no managed resource matches.
 	ErrResourceNotFound = errors.New("resource not found")
@@ -47,6 +70,26 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		s.log.Error("delete resource failed", "kind", kind, "name", name, "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
+// handleResourceDetail returns the desired manifest and observed state.
+func (s *Server) handleResourceDetail(w http.ResponseWriter, r *http.Request) {
+	if s.detailer == nil {
+		writeError(w, http.StatusServiceUnavailable, "detail unavailable")
+		return
+	}
+	kind := chi.URLParam(r, "kind")
+	name := chi.URLParam(r, "name")
+	detail, err := s.detailer.ResourceDetail(r.Context(), kind, name)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, detail)
+	case errors.Is(err, ErrResourceNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	default:
+		s.log.Error("resource detail failed", "kind", kind, "name", name, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 	}
 }

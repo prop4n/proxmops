@@ -30,6 +30,7 @@ func (s *Server) routes() http.Handler {
 			r.Use(s.requireAuth)
 			r.Get("/me", s.handleMe)
 			r.Get("/resources", s.handleResources)
+			r.Get("/resources/{kind}/{name}", s.handleResourceDetail)
 			r.Delete("/resources/{kind}/{name}", s.handleDeleteResource)
 			r.Get("/resources/{kind}/{name}/events", s.handleResourceEvents)
 			r.Get("/events", s.handleEvents)

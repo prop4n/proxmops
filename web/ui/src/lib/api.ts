@@ -28,6 +28,21 @@ export interface Account {
 
 export type SyncState = 'Synced' | 'OutOfSync'
 
+export interface ObservedResource {
+  present: boolean
+  cores?: number
+  memoryMB?: number
+  cpu?: string
+  running?: boolean
+  ip?: string
+  nameserver?: string
+}
+
+export interface ResourceDetail {
+  desiredYAML: string
+  observed?: ObservedResource
+}
+
 export interface ResourceEvent {
   id: number
   kind: string
@@ -121,6 +136,8 @@ export const api = {
   resources: () => request<StatusSnapshot>('/resources'),
   deleteResource: (kind: string, name: string) =>
     request<null>(`/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  resourceDetail: (kind: string, name: string) =>
+    request<ResourceDetail>(`/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`),
   resourceEvents: (kind: string, name: string) =>
     request<ResourceEvent[]>(`/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/events`),
   getSettings: () => request<SettingsSnapshot>('/settings'),

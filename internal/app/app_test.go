@@ -46,6 +46,42 @@ func vmRes(name string, vmid int) manifest.VirtualMachine {
 	}
 }
 
+// fakeObserver implements clusterObserver for detail tests.
+type fakeObserver struct {
+	guests []proxmox.Object
+	isos   map[string][]string
+}
+
+func (f *fakeObserver) ListGuests(context.Context) ([]proxmox.Object, error) { return f.guests, nil }
+func (f *fakeObserver) ListISOs(_ context.Context, node, storage string) ([]string, error) {
+	return f.isos[node+"/"+storage], nil
+}
+
+func TestObserveGuestByVMID(t *testing.T) {
+	obs := &fakeObserver{guests: []proxmox.Object{
+		{Kind: proxmox.KindVirtualMachine, VMID: 101, Cores: 4, MemoryMB: 2048, CPU: "host", Running: true},
+	}}
+	got := observeResource(context.Background(), obs, vmRes("web", 101))
+	if got == nil || !got.Present || got.Cores != 4 || got.MemoryMB != 2048 || !got.Running {
+		t.Fatalf("observed = %+v, want present 4c/2048/running", got)
+	}
+}
+
+func TestObserveGuestAbsent(t *testing.T) {
+	got := observeResource(context.Background(), &fakeObserver{}, vmRes("web", 999))
+	if got == nil || got.Present {
+		t.Fatalf("observed = %+v, want present=false", got)
+	}
+}
+
+func TestObserveISOPresence(t *testing.T) {
+	obs := &fakeObserver{isos: map[string][]string{"pve/local": {"nixos.iso"}}}
+	got := observeResource(context.Background(), obs, isoRes("nix", "https://ex/nixos.iso"))
+	if got == nil || !got.Present {
+		t.Fatalf("observed = %+v, want present ISO", got)
+	}
+}
+
 func TestDeleteManagedDeletesISO(t *testing.T) {
 	del := &fakeDeleter{}
 	desired := []manifest.Resource{isoRes("nix", "https://ex/path/nixos.iso?token=x")}
