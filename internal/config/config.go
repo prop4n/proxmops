@@ -76,6 +76,8 @@ type Reconcile struct {
 	AutoSync bool          `mapstructure:"autoSync"`
 	Prune    bool          `mapstructure:"prune"`
 	DryRun   bool          `mapstructure:"dryRun"`
+	// Concurrency bounds how many actions apply in parallel.
+	Concurrency int `mapstructure:"concurrency"`
 }
 
 // Load reads the config file at path, overlays PROXMOPS_ environment variables,
@@ -154,6 +156,7 @@ func (c *Config) resolveSecrets() error {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("source.revision", "main")
 	v.SetDefault("reconcile.interval", time.Minute)
+	v.SetDefault("reconcile.concurrency", 4)
 	v.SetDefault("server.databasePath", "proxmops.db")
 }
 
@@ -188,6 +191,7 @@ var envBoundKeys = []string{
 	"reconcile.autoSync",
 	"reconcile.prune",
 	"reconcile.dryRun",
+	"reconcile.concurrency",
 	"server.databasePath",
 	"server.keyPath",
 	"server.cookieSecure",

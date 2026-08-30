@@ -60,6 +60,9 @@ source:
 	if cfg.Reconcile.Interval != time.Minute {
 		t.Errorf("interval = %v, want default 1m", cfg.Reconcile.Interval)
 	}
+	if cfg.Reconcile.Concurrency != 4 {
+		t.Errorf("concurrency = %d, want default 4", cfg.Reconcile.Concurrency)
+	}
 }
 
 func TestLoadEnvOverridesFile(t *testing.T) {

@@ -59,6 +59,7 @@ type ReconcileSettings struct {
 	AutoSync        bool `json:"autoSync"`
 	Prune           bool `json:"prune"`
 	DryRun          bool `json:"dryRun"`
+	Concurrency     int  `json:"concurrency"`
 }
 
 // Duration converts the interval to a time.Duration, defaulting to one minute.
@@ -202,10 +203,11 @@ func (st Settings) Config() config.Config {
 			Token:    st.Source.Token,
 		},
 		Reconcile: config.Reconcile{
-			Interval: st.Reconcile.Duration(),
-			AutoSync: st.Reconcile.AutoSync,
-			Prune:    st.Reconcile.Prune,
-			DryRun:   st.Reconcile.DryRun,
+			Interval:    st.Reconcile.Duration(),
+			AutoSync:    st.Reconcile.AutoSync,
+			Prune:       st.Reconcile.Prune,
+			DryRun:      st.Reconcile.DryRun,
+			Concurrency: st.Reconcile.Concurrency,
 		},
 	}
 }
