@@ -223,6 +223,7 @@ func (a *App) newEngine(cfg config.Config, statusStore *status.Store) *reconcile
 	client := proxmox.New(cfg.Cluster)
 	src := source.New(cfg.Source)
 	reconcilers := []reconcile.Reconciler{
+		reconcile.NewTemplateReconciler(client),
 		reconcile.NewGuestReconciler(client),
 		reconcile.NewIsoReconciler(client),
 	}

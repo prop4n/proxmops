@@ -45,9 +45,11 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 		order = append(order, vm.Spec.VMID)
 	}
 
+	// Templates are qemu guests too, but the templateReconciler owns them; skip
+	// them here so a template is never seen as a VM to update or prune.
 	observedByVMID := make(map[int]proxmox.Object, len(observed))
 	for _, o := range observed {
-		if o.Kind == proxmox.KindVirtualMachine {
+		if o.Kind == proxmox.KindVirtualMachine && !o.IsTemplate {
 			observedByVMID[o.VMID] = o
 		}
 	}
@@ -107,9 +109,10 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 		}
 	}
 
-	// Deletes: owned VMs absent from the desired set.
+	// Deletes: owned VMs absent from the desired set. Templates are excluded;
+	// they belong to the templateReconciler.
 	for _, o := range observed {
-		if o.Kind != proxmox.KindVirtualMachine || !o.Owned() {
+		if o.Kind != proxmox.KindVirtualMachine || o.IsTemplate || !o.Owned() {
 			continue
 		}
 		if _, ok := desiredByVMID[o.VMID]; ok {

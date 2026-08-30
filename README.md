@@ -120,6 +120,36 @@ spec:
   state: running
 ```
 
+`image.source` also accepts an existing Proxmox volume instead of a URL, so an
+image already on a storage is used without re-downloading:
+
+```yaml
+  image:
+    source: local:import/debian-12-genericcloud-amd64.qcow2
+```
+
+A template, built from an image and converted to a Proxmox template. It is bare
+(hardware and image only); cloud-init is set on the VMs that clone it:
+
+```yaml
+apiVersion: proxmops.dev/v1
+kind: Template
+metadata:
+  name: debian-12-tpl
+  node: pve-node1
+spec:
+  vmid: 9000
+  image:
+    source: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+  cores: 2
+  memory: 2048
+  disks:
+    - storage: local-lvm
+      size: 10G
+  net:
+    - bridge: vmbr0
+```
+
 An LXC container:
 
 ```yaml

@@ -18,6 +18,7 @@ var reportedKinds = []manifest.Kind{
 	manifest.KindVirtualMachine,
 	manifest.KindContainer,
 	manifest.KindIso,
+	manifest.KindTemplate,
 }
 
 // Source supplies the desired state for a reconciliation pass.

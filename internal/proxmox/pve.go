@@ -74,13 +74,14 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 			continue
 		}
 		o := Object{
-			Kind:    kind,
-			Name:    r.Name,
-			Node:    r.Node,
-			ID:      r.ID,
-			VMID:    int(r.VMID),
-			Running: r.Status == "running",
-			Tags:    parseTags(r.Tags),
+			Kind:       kind,
+			Name:       r.Name,
+			Node:       r.Node,
+			ID:         r.ID,
+			VMID:       int(r.VMID),
+			Running:    r.Status == "running",
+			IsTemplate: r.Template == 1,
+			Tags:       parseTags(r.Tags),
 		}
 		// Configured cores/memory come from the VM config (authoritative for
 		// drift); the cluster listing only carries the live, running values.
@@ -183,7 +184,7 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 	if err != nil {
 		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("create vm %d: %w", spec.VMID, err)
 	}
 
@@ -206,12 +207,21 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 	if spec.Disk.Storage == "" {
 		return fmt.Errorf("vm %d: disks[0].storage is required for a cloud image", spec.VMID)
 	}
-	importStorage, err := c.resolveImportStorage(ctx, node, spec.Image.ImportStorage)
-	if err != nil {
-		return err
-	}
-	if err := c.downloadImport(ctx, node, importStorage, spec.Image.Filename, spec.Image.Source); err != nil {
-		return err
+
+	// The image is either a remote URL (download to an import storage first) or a
+	// reference to a volume already on a storage (use it directly).
+	var importVolume string
+	if isVolumeRef(spec.Image.Source) {
+		importVolume = spec.Image.Source
+	} else {
+		importStorage, err := c.resolveImportStorage(ctx, node, spec.Image.ImportStorage)
+		if err != nil {
+			return err
+		}
+		if err := c.downloadImport(ctx, node, importStorage, spec.Image.Filename, spec.Image.Source); err != nil {
+			return err
+		}
+		importVolume = importStorage + ":import/" + spec.Image.Filename
 	}
 
 	vm, err := node.VirtualMachine(ctx, spec.VMID)
@@ -220,22 +230,24 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 	}
 
 	// Import the image as scsi0.
-	importFrom := fmt.Sprintf("%s:0,import-from=%s:import/%s", spec.Disk.Storage, importStorage, spec.Image.Filename)
+	importFrom := fmt.Sprintf("%s:0,import-from=%s", spec.Disk.Storage, importVolume)
 	if err := c.configWait(ctx, vm, pve.VirtualMachineOption{Name: "scsi0", Value: importFrom}); err != nil {
 		return fmt.Errorf("import disk for vm %d: %w", spec.VMID, err)
 	}
 
-	// Cloud-init drive, boot order, and settings. Cloud images boot with
-	// console=ttyS0, so a serial device is required or init dies early; ostype
-	// l26 sets the right Linux defaults.
-	ci := spec.CloudInit
+	// Boot order + serial console. Cloud images boot with console=ttyS0, so a
+	// serial device is required or init dies early; ostype l26 sets the right
+	// Linux defaults. A template is bare: no cloud-init drive.
 	opts := []pve.VirtualMachineOption{
-		{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"},
 		{Name: "boot", Value: "order=scsi0"},
 		{Name: "serial0", Value: "socket"},
 		{Name: "vga", Value: "serial0"},
 		{Name: "ostype", Value: "l26"},
 	}
+	if !spec.AsTemplate {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"})
+	}
+	ci := spec.CloudInit
 	if ci != nil {
 		if ci.User != "" {
 			opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: ci.User})
@@ -272,9 +284,53 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 		if err != nil {
 			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
 		}
-		if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+		if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
 		}
+	}
+	return nil
+}
+
+// isVolumeRef reports whether an image source is an existing Proxmox volume
+// (e.g. "local:import/debian.qcow2") rather than a URL to download.
+func isVolumeRef(source string) bool {
+	return !strings.Contains(source, "://")
+}
+
+// ConvertToTemplate turns a built VM into a template. It is idempotent: a VM
+// that is already a template is left as is.
+func (c *PVE) ConvertToTemplate(ctx context.Context, node string, vmid int) error {
+	vm, err := c.vm(ctx, node, vmid)
+	if err != nil {
+		return err
+	}
+	if vm.Template {
+		return nil
+	}
+	task, err := vm.ConvertToTemplate(ctx)
+	if err != nil {
+		return fmt.Errorf("convert vm %d to template: %w", vmid, err)
+	}
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
+		return fmt.Errorf("convert vm %d to template: %w", vmid, err)
+	}
+	return nil
+}
+
+// waitTask waits for a Proxmox task and turns a failed exit status into an
+// error. The SDK's task.Wait returns nil as soon as the task stops running, even
+// when it failed (e.g. a download 404), so the exit status must be checked or a
+// failed operation looks successful.
+func waitTask(ctx context.Context, task *pve.Task, interval, timeout time.Duration) error {
+	if err := task.Wait(ctx, interval, timeout); err != nil {
+		return err
+	}
+	if !task.IsSuccessful {
+		status := task.ExitStatus
+		if status == "" {
+			status = "unknown error"
+		}
+		return fmt.Errorf("task %s: %s", task.UPID, status)
 	}
 	return nil
 }
@@ -285,7 +341,7 @@ func (c *PVE) configWait(ctx context.Context, vm *pve.VirtualMachine, opts ...pv
 	if err != nil {
 		return err
 	}
-	return task.Wait(ctx, time.Second, guestTimeout)
+	return waitTask(ctx, task, time.Second, guestTimeout)
 }
 
 // resolveImportStorage returns the requested import storage, or the first one on
@@ -327,7 +383,7 @@ func (c *PVE) downloadImport(ctx context.Context, node *pve.Node, storageName, f
 	if err != nil {
 		return fmt.Errorf("download %s: %w", filename, err)
 	}
-	if err := task.Wait(ctx, 2*time.Second, downloadTimeout); err != nil {
+	if err := waitTask(ctx, task, 2*time.Second, downloadTimeout); err != nil {
 		return fmt.Errorf("download %s: %w", filename, err)
 	}
 	return nil
@@ -351,7 +407,7 @@ func (c *PVE) DeleteGuest(ctx context.Context, obj Object) error {
 	if err != nil {
 		return fmt.Errorf("delete vm %d: %w", obj.VMID, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("delete vm %d: %w", obj.VMID, err)
 	}
 	return nil
@@ -387,7 +443,7 @@ func (c *PVE) UpdateGuest(ctx context.Context, upd GuestUpdate) error {
 	if err != nil {
 		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("configure vm %d: %w", upd.VMID, err)
 	}
 	if upd.Running != vm.IsRunning() {
@@ -436,7 +492,7 @@ func (c *PVE) setPower(ctx context.Context, node string, vmid int, running bool)
 	if err != nil {
 		return fmt.Errorf("%s vm %d: %w", verb, vmid, err)
 	}
-	if err := task.Wait(ctx, time.Second, guestTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("%s vm %d: %w", verb, vmid, err)
 	}
 	return nil
@@ -478,7 +534,7 @@ func (c *PVE) DownloadISO(ctx context.Context, req IsoDownload) error {
 	if err != nil {
 		return fmt.Errorf("download %s: %w", req.Filename, err)
 	}
-	if err := task.Wait(ctx, 2*time.Second, downloadTimeout); err != nil {
+	if err := waitTask(ctx, task, 2*time.Second, downloadTimeout); err != nil {
 		return fmt.Errorf("download %s: %w", req.Filename, err)
 	}
 	return nil
@@ -498,7 +554,7 @@ func (c *PVE) DeleteISO(ctx context.Context, node, storageName, filename string)
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", filename, err)
 	}
-	if err := task.Wait(ctx, time.Second, deleteTimeout); err != nil {
+	if err := waitTask(ctx, task, time.Second, deleteTimeout); err != nil {
 		return fmt.Errorf("delete %s: %w", filename, err)
 	}
 	return nil

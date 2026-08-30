@@ -11,11 +11,12 @@ import (
 
 // fakeGuestStore is an in-memory GuestStore for tests.
 type fakeGuestStore struct {
-	guests   []proxmox.Object
-	created  []proxmox.GuestSpec
-	updated  []proxmox.GuestUpdate
-	deleted  []proxmox.Object
-	rebooted []int
+	guests    []proxmox.Object
+	created   []proxmox.GuestSpec
+	updated   []proxmox.GuestUpdate
+	deleted   []proxmox.Object
+	rebooted  []int
+	converted []int
 }
 
 func (f *fakeGuestStore) ListGuests(context.Context) ([]proxmox.Object, error) {
@@ -39,6 +40,11 @@ func (f *fakeGuestStore) DeleteGuest(_ context.Context, o proxmox.Object) error 
 
 func (f *fakeGuestStore) RebootGuest(_ context.Context, _ string, vmid int) error {
 	f.rebooted = append(f.rebooted, vmid)
+	return nil
+}
+
+func (f *fakeGuestStore) ConvertToTemplate(_ context.Context, _ string, vmid int) error {
+	f.converted = append(f.converted, vmid)
 	return nil
 }
 
@@ -239,6 +245,18 @@ func TestGuestNoDriftOnMatchingCloudInit(t *testing.T) {
 	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
 	if !plan.Empty() {
 		t.Fatalf("want empty plan, got %+v", plan.Actions)
+	}
+}
+
+func TestGuestIgnoresTemplates(t *testing.T) {
+	// An owned template must not be pruned by the guest reconciler even when no
+	// VM manifest references its vmid.
+	tpl := ownedGuest("deb-tpl")
+	tpl.IsTemplate = true
+	store := &fakeGuestStore{guests: []proxmox.Object{tpl}}
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), nil)
+	if !plan.Empty() {
+		t.Fatalf("guest reconciler must ignore templates, got %+v", plan.Actions)
 	}
 }
 
