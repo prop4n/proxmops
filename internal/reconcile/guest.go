@@ -54,6 +54,14 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 		}
 	}
 
+	// Declared templates, so a VM's fromTemplate name resolves to a vmid.
+	templateVMIDs := make(map[string]int)
+	for _, r := range filterKinds(desired, manifest.KindTemplate) {
+		if tpl, ok := r.(manifest.Template); ok {
+			templateVMIDs[tpl.Metadata.Name] = tpl.Spec.VMID
+		}
+	}
+
 	var plan Plan
 
 	// Creates and updates, in manifest order.
@@ -61,13 +69,19 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 		vm := desiredByVMID[vmid]
 		obs, present := observedByVMID[vmid]
 		if !present {
-			spec := desiredSpec(vm)
+			// Resolution errors (e.g. an undeclared template) surface as a failing
+			// action rather than a silent skip.
+			spec, specErr := desiredSpec(vm, templateVMIDs)
+			apply := func(ctx context.Context) error { return g.store.CreateGuest(ctx, spec) }
+			if specErr != nil {
+				apply = func(context.Context) error { return specErr }
+			}
 			plan.Actions = append(plan.Actions, Action{
 				Type:   ActionCreate,
 				Kind:   manifest.KindVirtualMachine,
 				Name:   vm.Metadata.Name,
 				Reason: "not present in cluster",
-				Apply:  func(ctx context.Context) error { return g.store.CreateGuest(ctx, spec) },
+				Apply:  apply,
 			})
 			continue
 		}
@@ -202,8 +216,10 @@ func powerWord(running bool) string {
 }
 
 // desiredSpec projects a manifest VM onto the flat create spec, adding the
-// ownership tag the created guest must carry.
-func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
+// ownership tag the created guest must carry. templateVMIDs maps declared
+// template names to their vmid, used to resolve a fromTemplate clone; a
+// reference to an undeclared template is an error.
+func desiredSpec(vm manifest.VirtualMachine, templateVMIDs map[string]int) (proxmox.GuestSpec, error) {
 	tags := append([]string{}, vm.Metadata.Tags...)
 	tags = append(tags, proxmox.ManagedTag)
 
@@ -232,6 +248,13 @@ func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
 			ImportStorage: vm.Spec.Image.ImportStorage,
 		}
 	}
+	if ft := vm.Spec.FromTemplate; ft != nil {
+		tplVMID, ok := templateVMIDs[ft.Name]
+		if !ok {
+			return proxmox.GuestSpec{}, fmt.Errorf("template %q is not declared", ft.Name)
+		}
+		spec.Clone = &proxmox.GuestClone{TemplateVMID: tplVMID, Full: !ft.Linked}
+	}
 	if ci := vm.Spec.CloudInit; ci != nil {
 		spec.CloudInit = &proxmox.GuestCloudInit{
 			User:         ci.User,
@@ -242,5 +265,5 @@ func desiredSpec(vm manifest.VirtualMachine) proxmox.GuestSpec {
 			SearchDomain: ci.SearchDomain,
 		}
 	}
-	return spec
+	return spec, nil
 }
