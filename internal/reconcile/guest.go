@@ -48,17 +48,24 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 	// Templates are qemu guests too, but the templateReconciler owns them; skip
 	// them here so a template is never seen as a VM to update or prune.
 	observedByVMID := make(map[int]proxmox.Object, len(observed))
+	readyTemplateVMIDs := make(map[int]bool)
 	for _, o := range observed {
 		if o.Kind == proxmox.KindVirtualMachine && !o.IsTemplate {
 			observedByVMID[o.VMID] = o
 		}
+		if o.IsTemplate {
+			readyTemplateVMIDs[o.VMID] = true
+		}
 	}
 
-	// Declared templates, so a VM's fromTemplate name resolves to a vmid.
+	// Declared templates, so a VM's fromTemplate name resolves to a vmid, and so
+	// the delete scan can skip VMIDs a template owns while it is being built.
 	templateVMIDs := make(map[string]int)
+	templateVMIDByID := make(map[int]bool)
 	for _, r := range filterKinds(desired, manifest.KindTemplate) {
 		if tpl, ok := r.(manifest.Template); ok {
 			templateVMIDs[tpl.Metadata.Name] = tpl.Spec.VMID
+			templateVMIDByID[tpl.Spec.VMID] = true
 		}
 	}
 
@@ -69,6 +76,14 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 		vm := desiredByVMID[vmid]
 		obs, present := observedByVMID[vmid]
 		if !present {
+			// A clone must wait for its template to be built and converted; if the
+			// template is declared but not yet a ready template on the cluster, defer
+			// the clone to a later pass rather than racing the build.
+			if ft := vm.Spec.FromTemplate; ft != nil {
+				if tplVMID, ok := templateVMIDs[ft.Name]; ok && !readyTemplateVMIDs[tplVMID] {
+					continue
+				}
+			}
 			// Resolution errors (e.g. an undeclared template) surface as a failing
 			// action rather than a silent skip.
 			spec, specErr := desiredSpec(vm, templateVMIDs)
@@ -124,12 +139,17 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 	}
 
 	// Deletes: owned VMs absent from the desired set. Templates are excluded;
-	// they belong to the templateReconciler.
+	// they belong to the templateReconciler. A VMID claimed by a declared
+	// Template is skipped too, so a template still building (its VM exists but is
+	// not yet converted) is not deleted as a stray VM.
 	for _, o := range observed {
 		if o.Kind != proxmox.KindVirtualMachine || o.IsTemplate || !o.Owned() {
 			continue
 		}
 		if _, ok := desiredByVMID[o.VMID]; ok {
+			continue
+		}
+		if _, ok := templateVMIDByID[o.VMID]; ok {
 			continue
 		}
 		plan.Actions = append(plan.Actions, Action{

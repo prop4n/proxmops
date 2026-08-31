@@ -257,8 +257,28 @@ func tplRes(name string, vmid int) manifest.Template {
 	}
 }
 
+func TestGuestDoesNotDeleteHalfBuiltTemplate(t *testing.T) {
+	// A declared Template whose VM exists on the cluster but is not yet converted
+	// (IsTemplate=false) must not be deleted by the guest reconciler: it belongs
+	// to the template reconciler, which is still building it.
+	obs := proxmox.Object{Kind: proxmox.KindVirtualMachine, Name: "deb-tpl", VMID: 9000, Node: "pve", Tags: []string{proxmox.ManagedTag}}
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+	desired := []manifest.Resource{tplRes("deb-tpl", 9000)}
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), desired)
+	for _, a := range plan.Actions {
+		if a.Type == ActionDelete {
+			t.Fatalf("must not delete a half-built template, got %+v", plan.Actions)
+		}
+	}
+}
+
+func readyTpl(name string, vmid int) proxmox.Object {
+	return proxmox.Object{Kind: proxmox.KindVirtualMachine, Name: name, VMID: vmid, Node: "pve", IsTemplate: true, Tags: []string{proxmox.ManagedTag}}
+}
+
 func TestGuestClonesFromTemplate(t *testing.T) {
-	store := &fakeGuestStore{}
+	store := &fakeGuestStore{guests: []proxmox.Object{readyTpl("deb-tpl", 9000)}}
 	vm := vmResource("web-01")
 	vm.Spec.FromTemplate = &manifest.FromTemplate{Name: "deb-tpl"}
 	vm.Spec.CloudInit = &manifest.CloudInit{User: "debian"}
@@ -283,8 +303,34 @@ func TestGuestClonesFromTemplate(t *testing.T) {
 	}
 }
 
-func TestGuestLinkedClone(t *testing.T) {
+func TestGuestDefersCloneUntilTemplateReady(t *testing.T) {
+	// The template is declared but not yet built on the cluster: the clone must be
+	// deferred (no action) rather than attempted, to avoid racing the build.
 	store := &fakeGuestStore{}
+	vm := vmResource("app")
+	vm.Spec.FromTemplate = &manifest.FromTemplate{Name: "deb-tpl"}
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(),
+		[]manifest.Resource{tplRes("deb-tpl", 9000), vm})
+	if len(plan.Actions) != 0 {
+		t.Fatalf("clone should be deferred until the template is ready, got %+v", plan.Actions)
+	}
+}
+
+func TestGuestClonesWhenTemplateReady(t *testing.T) {
+	// The template exists on the cluster and is converted: the clone proceeds.
+	tpl := proxmox.Object{Kind: proxmox.KindVirtualMachine, Name: "deb-tpl", VMID: 9000, Node: "pve", IsTemplate: true, Tags: []string{proxmox.ManagedTag}}
+	store := &fakeGuestStore{guests: []proxmox.Object{tpl}}
+	vm := vmResource("app")
+	vm.Spec.FromTemplate = &manifest.FromTemplate{Name: "deb-tpl"}
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(),
+		[]manifest.Resource{tplRes("deb-tpl", 9000), vm})
+	if len(plan.Actions) != 1 || plan.Actions[0].Type != ActionCreate {
+		t.Fatalf("want one create, got %+v", plan.Actions)
+	}
+}
+
+func TestGuestLinkedClone(t *testing.T) {
+	store := &fakeGuestStore{guests: []proxmox.Object{readyTpl("deb-tpl", 9000)}}
 	vm := vmResource("web-01")
 	vm.Spec.FromTemplate = &manifest.FromTemplate{Name: "deb-tpl", Linked: true}
 	plan, _ := NewGuestReconciler(store).Plan(context.Background(),
