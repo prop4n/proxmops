@@ -426,16 +426,31 @@ func (c *PVE) cloneFromTemplate(ctx context.Context, node *pve.Node, spec GuestS
 	return nil
 }
 
-// resizeDisk grows the given disk slot to size and waits for the task.
+// resizeDisk grows the given disk slot to size. spec.size means "at least this
+// large": when the disk already meets or exceeds it (e.g. an image already that
+// size, rounded up by the storage), Proxmox rejects the shrink and that is
+// treated as done rather than an error.
 func (c *PVE) resizeDisk(ctx context.Context, vm *pve.VirtualMachine, vmid int, slot, size string) error {
 	task, err := vm.ResizeDisk(ctx, slot, size)
 	if err != nil {
+		if isShrinkError(err) {
+			return nil
+		}
 		return fmt.Errorf("resize disk for vm %d: %w", vmid, err)
 	}
 	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
+		if isShrinkError(err) {
+			return nil
+		}
 		return fmt.Errorf("resize disk for vm %d: %w", vmid, err)
 	}
 	return nil
+}
+
+// isShrinkError reports whether an error is Proxmox refusing to shrink a disk,
+// which for our "at least this size" intent means the disk is already big enough.
+func isShrinkError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "shrink")
 }
 
 // storageOf returns the storage name from a Proxmox volume id like

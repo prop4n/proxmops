@@ -1,6 +1,7 @@
 package proxmox
 
 import (
+	"errors"
 	"slices"
 	"testing"
 )
@@ -30,6 +31,15 @@ func TestIsoCdromOption(t *testing.T) {
 	opt, ok := isoCdromOption("local:iso/seed.iso")
 	if !ok || opt.Name != "ide0" || opt.Value != "local:iso/seed.iso,media=cdrom" {
 		t.Fatalf("got %+v, %v; want ide0=local:iso/seed.iso,media=cdrom", opt, ok)
+	}
+}
+
+func TestIsShrinkError(t *testing.T) {
+	if !isShrinkError(errors.New("shrinking disks is not supported")) {
+		t.Error("want shrink error detected")
+	}
+	if isShrinkError(errors.New("no such storage")) || isShrinkError(nil) {
+		t.Error("false positive on non-shrink error")
 	}
 }
 
