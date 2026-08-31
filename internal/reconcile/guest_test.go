@@ -394,13 +394,14 @@ func TestGuestPresentCloneNotRecreated(t *testing.T) {
 	}
 }
 
-func TestGuestUserDataDriftRebootsWhenApplyModeReboot(t *testing.T) {
+func TestGuestUserDataDriftRebootsRunningWhenApplyModeReboot(t *testing.T) {
 	obs := ownedGuest("web-01")
-	obs.CidataHash = "oldhash0"
+	obs.CidataHash, obs.Running = "oldhash0", true
 	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
 
 	vm := vmResource("web-01")
 	vm.Spec.UserData = "#cloud-config\n((system-file . \"systems/web01.scm\"))\n"
+	vm.Spec.State = manifest.StateRunning
 	vm.Spec.ApplyMode = manifest.ApplyModeReboot
 
 	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
@@ -418,20 +419,45 @@ func TestGuestUserDataDriftRebootsWhenApplyModeReboot(t *testing.T) {
 	}
 }
 
-func TestGuestUserDataDriftReportsRebootRequiredByDefault(t *testing.T) {
+func TestGuestUserDataDriftReportsRebootRequiredForRunning(t *testing.T) {
 	obs := ownedGuest("web-01")
-	obs.CidataHash = "oldhash0"
+	obs.CidataHash, obs.Running = "oldhash0", true
 	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
 
 	vm := vmResource("web-01")
 	vm.Spec.UserData = "#cloud-config\nnew\n"
+	vm.Spec.State = manifest.StateRunning
 
 	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
 	if len(plan.Actions) != 1 || !plan.Actions[0].Informational {
 		t.Fatalf("want one informational action, got %+v", plan.Actions)
 	}
 	if len(store.syncedUserData) != 0 {
-		t.Fatal("must not re-provision without applyMode reboot")
+		t.Fatal("must not re-provision a running VM without applyMode reboot")
+	}
+}
+
+func TestGuestUserDataDriftReprovisionsStoppedWithoutReboot(t *testing.T) {
+	// A stopped VM reads the new cidata on its next boot: re-provision, no reboot.
+	obs := ownedGuest("web-01")
+	obs.CidataHash, obs.Running = "oldhash0", false
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.UserData = "#cloud-config\nnew\n"
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if len(plan.Actions) != 1 || plan.Actions[0].Informational {
+		t.Fatalf("want one real re-provision action, got %+v", plan.Actions)
+	}
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.syncedUserData) != 1 {
+		t.Fatalf("user-data not synced: %+v", store.syncedUserData)
+	}
+	if len(store.rebooted) != 0 {
+		t.Fatal("a stopped VM must not be rebooted")
 	}
 }
 
