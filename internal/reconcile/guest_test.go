@@ -329,6 +329,21 @@ func TestGuestClonesWhenTemplateReady(t *testing.T) {
 	}
 }
 
+func TestGuestCloneCarriesISO(t *testing.T) {
+	store := &fakeGuestStore{guests: []proxmox.Object{readyTpl("deb-tpl", 9000)}}
+	vm := vmResource("web-01")
+	vm.Spec.FromTemplate = &manifest.FromTemplate{Name: "deb-tpl"}
+	vm.Spec.ISO = "local:iso/seed.iso"
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(),
+		[]manifest.Resource{tplRes("deb-tpl", 9000), vm})
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.created[0].ISO != "local:iso/seed.iso" {
+		t.Fatalf("iso not propagated to clone spec: %q", store.created[0].ISO)
+	}
+}
+
 func TestGuestLinkedClone(t *testing.T) {
 	store := &fakeGuestStore{guests: []proxmox.Object{readyTpl("deb-tpl", 9000)}}
 	vm := vmResource("web-01")

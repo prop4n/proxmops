@@ -25,9 +25,12 @@ type VirtualMachineSpec struct {
 	Memory int `yaml:"memory"`
 	// CPU is the processor type (e.g. "x86-64-v2", "host"). Empty keeps the
 	// Proxmox default.
-	CPU   string     `yaml:"cpu,omitempty"`
-	Disks []Disk     `yaml:"disks,omitempty"`
-	Net   []NIC      `yaml:"net,omitempty"`
+	CPU   string `yaml:"cpu,omitempty"`
+	Disks []Disk `yaml:"disks,omitempty"`
+	Net   []NIC  `yaml:"net,omitempty"`
+	// ISO attaches an existing image as a cdrom drive, given as a Proxmox volume
+	// reference (e.g. "local:iso/seed.iso"). Useful for a NoCloud cidata disk
+	// carrying custom user-data. Independent of cloudInit.
 	ISO   string     `yaml:"iso,omitempty"`
 	State PowerState `yaml:"state,omitempty"`
 	// Image, when set, provisions the VM from a cloud image instead of a blank
