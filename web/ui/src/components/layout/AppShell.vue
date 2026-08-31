@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, LogOut, Settings2 } from 'lucide-vue-next'
+import { LayoutDashboard, LogOut, ScrollText, Settings2 } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import StatusLed from '@/components/StatusLed.vue'
 import ResourceDetail from '@/components/ResourceDetail.vue'
@@ -24,6 +24,7 @@ onUnmounted(() => sync.disconnect())
 
 const nav = [
   { name: 'dashboard', label: 'Overview', icon: LayoutDashboard, to: '/' },
+  { name: 'logs', label: 'Logs', icon: ScrollText, to: '/logs' },
   { name: 'settings', label: 'Settings', icon: Settings2, to: '/settings' },
 ]
 

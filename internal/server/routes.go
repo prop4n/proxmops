@@ -34,6 +34,8 @@ func (s *Server) routes() http.Handler {
 			r.Delete("/resources/{kind}/{name}", s.handleDeleteResource)
 			r.Get("/resources/{kind}/{name}/events", s.handleResourceEvents)
 			r.Get("/events", s.handleEvents)
+			r.Get("/logs", s.handleLogs)
+			r.Get("/logs/stream", s.handleLogStream)
 			r.Get("/settings", s.handleGetSettings)
 			r.Put("/settings", s.handlePutSettings)
 			r.Post("/settings/test", s.handleTestSettings)

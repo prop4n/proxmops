@@ -26,6 +26,12 @@ export interface Account {
   username: string
 }
 
+export interface LogEntry {
+  time: string
+  level: string
+  message: string
+}
+
 export type SyncState = 'Synced' | 'OutOfSync'
 
 export interface ObservedResource {
@@ -134,6 +140,7 @@ export const api = {
   logout: () => request<null>('/logout', { method: 'POST' }),
   me: () => request<Account>('/me'),
   resources: () => request<StatusSnapshot>('/resources'),
+  logs: () => request<LogEntry[]>('/logs'),
   deleteResource: (kind: string, name: string) =>
     request<null>(`/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   resourceDetail: (kind: string, name: string) =>
