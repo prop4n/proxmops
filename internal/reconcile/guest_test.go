@@ -12,12 +12,13 @@ import (
 
 // fakeGuestStore is an in-memory GuestStore for tests.
 type fakeGuestStore struct {
-	guests    []proxmox.Object
-	created   []proxmox.GuestSpec
-	updated   []proxmox.GuestUpdate
-	deleted   []proxmox.Object
-	rebooted  []int
-	converted []int
+	guests         []proxmox.Object
+	created        []proxmox.GuestSpec
+	updated        []proxmox.GuestUpdate
+	deleted        []proxmox.Object
+	rebooted       []int
+	converted      []int
+	syncedUserData []proxmox.GuestSpec
 }
 
 func (f *fakeGuestStore) ListGuests(context.Context) ([]proxmox.Object, error) {
@@ -46,6 +47,11 @@ func (f *fakeGuestStore) RebootGuest(_ context.Context, _ string, vmid int) erro
 
 func (f *fakeGuestStore) ConvertToTemplate(_ context.Context, _ string, vmid int) error {
 	f.converted = append(f.converted, vmid)
+	return nil
+}
+
+func (f *fakeGuestStore) SyncUserData(_ context.Context, s proxmox.GuestSpec) error {
+	f.syncedUserData = append(f.syncedUserData, s)
 	return nil
 }
 
@@ -385,6 +391,88 @@ func TestGuestPresentCloneNotRecreated(t *testing.T) {
 		if a.Type == ActionCreate {
 			t.Fatalf("present VM must not be re-cloned, got %+v", plan.Actions)
 		}
+	}
+}
+
+func TestGuestUserDataDriftRebootsRunningWhenApplyModeReboot(t *testing.T) {
+	obs := ownedGuest("web-01")
+	obs.CidataHash, obs.Running = "oldhash0", true
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.UserData = "#cloud-config\n((system-file . \"systems/web01.scm\"))\n"
+	vm.Spec.State = manifest.StateRunning
+	vm.Spec.ApplyMode = manifest.ApplyModeReboot
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if len(plan.Actions) != 1 || plan.Actions[0].Informational {
+		t.Fatalf("want one real action, got %+v", plan.Actions)
+	}
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.syncedUserData) != 1 || store.syncedUserData[0].UserData != vm.Spec.UserData {
+		t.Fatalf("user-data not synced: %+v", store.syncedUserData)
+	}
+	if len(store.rebooted) != 1 || store.rebooted[0] != vmid("web-01") {
+		t.Fatalf("not rebooted: %v", store.rebooted)
+	}
+}
+
+func TestGuestUserDataDriftReportsRebootRequiredForRunning(t *testing.T) {
+	obs := ownedGuest("web-01")
+	obs.CidataHash, obs.Running = "oldhash0", true
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.UserData = "#cloud-config\nnew\n"
+	vm.Spec.State = manifest.StateRunning
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if len(plan.Actions) != 1 || !plan.Actions[0].Informational {
+		t.Fatalf("want one informational action, got %+v", plan.Actions)
+	}
+	if len(store.syncedUserData) != 0 {
+		t.Fatal("must not re-provision a running VM without applyMode reboot")
+	}
+}
+
+func TestGuestUserDataDriftReprovisionsStoppedWithoutReboot(t *testing.T) {
+	// A stopped VM reads the new cidata on its next boot: re-provision, no reboot.
+	obs := ownedGuest("web-01")
+	obs.CidataHash, obs.Running = "oldhash0", false
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.UserData = "#cloud-config\nnew\n"
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if len(plan.Actions) != 1 || plan.Actions[0].Informational {
+		t.Fatalf("want one real re-provision action, got %+v", plan.Actions)
+	}
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.syncedUserData) != 1 {
+		t.Fatalf("user-data not synced: %+v", store.syncedUserData)
+	}
+	if len(store.rebooted) != 0 {
+		t.Fatal("a stopped VM must not be rebooted")
+	}
+}
+
+func TestGuestNoUserDataDriftWhenHashMatches(t *testing.T) {
+	ud := "#cloud-config\n((system-file . \"systems/web01.scm\"))\n"
+	obs := ownedGuest("web-01")
+	obs.CidataHash = proxmox.CidataHash(ud)
+	store := &fakeGuestStore{guests: []proxmox.Object{obs}}
+
+	vm := vmResource("web-01")
+	vm.Spec.UserData = ud
+
+	plan, _ := NewGuestReconciler(store).Plan(context.Background(), []manifest.Resource{vm})
+	if !plan.Empty() {
+		t.Fatalf("matching user-data should not drift, got %+v", plan.Actions)
 	}
 }
 

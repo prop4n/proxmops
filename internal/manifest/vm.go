@@ -31,8 +31,13 @@ type VirtualMachineSpec struct {
 	// ISO attaches an existing image as a cdrom drive, given as a Proxmox volume
 	// reference (e.g. "local:iso/seed.iso"). Useful for a NoCloud cidata disk
 	// carrying custom user-data. Independent of cloudInit.
-	ISO   string     `yaml:"iso,omitempty"`
-	State PowerState `yaml:"state,omitempty"`
+	ISO string `yaml:"iso,omitempty"`
+	// UserData is a raw NoCloud user-data payload. proxmops generates a CIDATA
+	// seed ISO from it and attaches it as a cdrom, so any NoCloud consumer can
+	// read arbitrary user-data. Mutually exclusive with cloudInit (both render a
+	// CIDATA disk) and with iso (both attach the cdrom).
+	UserData string     `yaml:"userData,omitempty"`
+	State    PowerState `yaml:"state,omitempty"`
 	// Image, when set, provisions the VM from a cloud image instead of a blank
 	// disk, enabling cloud-init.
 	Image *Image `yaml:"image,omitempty"`
@@ -150,6 +155,12 @@ func (vm VirtualMachine) Validate() error {
 	}
 	if vm.Spec.CloudInit != nil && vm.Spec.Image == nil && vm.Spec.FromTemplate == nil {
 		return fmt.Errorf("spec.cloudInit requires spec.image or spec.fromTemplate")
+	}
+	if vm.Spec.UserData != "" && vm.Spec.CloudInit != nil {
+		return fmt.Errorf("spec.userData and spec.cloudInit are mutually exclusive")
+	}
+	if vm.Spec.UserData != "" && vm.Spec.ISO != "" {
+		return fmt.Errorf("spec.userData and spec.iso are mutually exclusive")
 	}
 	return nil
 }

@@ -114,6 +114,48 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 			})
 			continue
 		}
+		// A changed user-data means a new cidata ISO. A stopped VM reads it on its
+		// next boot, so it is re-provisioned right away. A running VM must reboot to
+		// re-read it: that happens only with applyMode reboot, otherwise it is
+		// reported and the old ISO is left in place until the reboot is authorised.
+		if vm.Spec.UserData != "" && proxmox.CidataHash(vm.Spec.UserData) != obs.CidataHash {
+			spec, specErr := desiredSpec(vm, templateVMIDs)
+			node, id := obs.Node, obs.VMID
+			reboot := obs.Running
+			if reboot && vm.Spec.ApplyMode != manifest.ApplyModeReboot {
+				plan.Actions = append(plan.Actions, Action{
+					Type:          ActionUpdate,
+					Kind:          manifest.KindVirtualMachine,
+					Name:          vm.Metadata.Name,
+					Reason:        "user-data changed, reboot required to apply (set applyMode: reboot)",
+					Informational: true,
+				})
+				continue
+			}
+			reason := "user-data changed, reprovisioning"
+			if reboot {
+				reason = "user-data changed, reprovisioning and restarting"
+			}
+			plan.Actions = append(plan.Actions, Action{
+				Type:   ActionUpdate,
+				Kind:   manifest.KindVirtualMachine,
+				Name:   vm.Metadata.Name,
+				Reason: reason,
+				Apply: func(ctx context.Context) error {
+					if specErr != nil {
+						return specErr
+					}
+					if err := g.store.SyncUserData(ctx, spec); err != nil {
+						return err
+					}
+					if reboot {
+						return g.store.RebootGuest(ctx, node, id)
+					}
+					return nil
+				},
+			})
+			continue
+		}
 		// Config already matches desired, but a prior change to a running VM is
 		// waiting on a restart. Reboot when opted in; otherwise just report it.
 		if obs.RebootPending {
@@ -252,6 +294,7 @@ func desiredSpec(vm manifest.VirtualMachine, templateVMIDs map[string]int) (prox
 		MemoryMB: vm.Spec.Memory,
 		CPU:      vm.Spec.CPU,
 		ISO:      vm.Spec.ISO,
+		UserData: vm.Spec.UserData,
 		Running:  vm.Spec.State == manifest.StateRunning,
 		Tags:     tags,
 	}
