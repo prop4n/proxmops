@@ -92,6 +92,16 @@ type GuestSpec struct {
 	CloudInit *GuestCloudInit
 	// AsTemplate builds a bare template: no cloud-init drive, never started.
 	AsTemplate bool
+	// Clone, when set, creates the VM by cloning a template instead of building
+	// from an image. Mutually exclusive with Image.
+	Clone *GuestClone
+}
+
+// GuestClone identifies the template to clone and the clone mode.
+type GuestClone struct {
+	TemplateVMID int
+	// Full makes an independent copy; false makes a linked clone.
+	Full bool
 }
 
 // GuestImage is a cloud image to import as the VM disk.

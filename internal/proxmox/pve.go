@@ -149,6 +149,18 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 		return fmt.Errorf("get node %s: %w", spec.Node, err)
 	}
 
+	// Cloning a template is a separate creation path: no inline create, the VM is
+	// copied from the template and then finished with cloud-init.
+	if spec.Clone != nil {
+		if err := c.cloneFromTemplate(ctx, node, spec); err != nil {
+			return err
+		}
+		if spec.Running {
+			return c.setPower(ctx, spec.Node, spec.VMID, true)
+		}
+		return nil
+	}
+
 	opts := []pve.VirtualMachineOption{
 		{Name: "name", Value: spec.Name},
 		{Name: "cores", Value: spec.Cores},
@@ -247,32 +259,7 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 	if !spec.AsTemplate {
 		opts = append(opts, pve.VirtualMachineOption{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"})
 	}
-	ci := spec.CloudInit
-	if ci != nil {
-		if ci.User != "" {
-			opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: ci.User})
-		}
-		if ci.Password != "" {
-			opts = append(opts, pve.VirtualMachineOption{Name: "cipassword", Value: ci.Password})
-		}
-		if len(ci.SSHKeys) > 0 {
-			opts = append(opts, pve.VirtualMachineOption{Name: "sshkeys", Value: pve.EncodeSSHKeys(ci.SSHKeys...)})
-		}
-		if ci.IP != "" {
-			// Proxmox wants key=value ("ip=dhcp"); accept a bare mode like "dhcp".
-			ip := ci.IP
-			if !strings.Contains(ip, "=") {
-				ip = "ip=" + ip
-			}
-			opts = append(opts, pve.VirtualMachineOption{Name: "ipconfig0", Value: ip})
-		}
-		if ci.Nameserver != "" {
-			opts = append(opts, pve.VirtualMachineOption{Name: "nameserver", Value: ci.Nameserver})
-		}
-		if ci.SearchDomain != "" {
-			opts = append(opts, pve.VirtualMachineOption{Name: "searchdomain", Value: ci.SearchDomain})
-		}
-	}
+	opts = append(opts, cloudInitOptions(spec.CloudInit)...)
 	if err := c.configWait(ctx, vm, opts...); err != nil {
 		return fmt.Errorf("cloud-init config for vm %d: %w", spec.VMID, err)
 	}
@@ -317,6 +304,78 @@ func (c *PVE) ConvertToTemplate(ctx context.Context, node string, vmid int) erro
 	return nil
 }
 
+// cloneFromTemplate clones the template into the new VM, then finishes it: adds
+// the cloud-init drive the bare template lacks, applies cloud-init and any
+// cores/memory/cpu overrides, and resizes the disk when a larger size is asked.
+// The template already carries the serial console from its build, so it boots.
+func (c *PVE) cloneFromTemplate(ctx context.Context, node *pve.Node, spec GuestSpec) error {
+	tpl, err := node.VirtualMachine(ctx, spec.Clone.TemplateVMID)
+	if err != nil {
+		return fmt.Errorf("get template %d: %w", spec.Clone.TemplateVMID, err)
+	}
+	_, task, err := tpl.Clone(ctx, &pve.VirtualMachineCloneOptions{
+		NewID:   spec.VMID,
+		Full:    pve.IntOrBool(spec.Clone.Full),
+		Name:    spec.Name,
+		Storage: spec.Disk.Storage,
+	})
+	if err != nil {
+		return fmt.Errorf("clone template %d to vm %d: %w", spec.Clone.TemplateVMID, spec.VMID, err)
+	}
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
+		return fmt.Errorf("clone template %d to vm %d: %w", spec.Clone.TemplateVMID, spec.VMID, err)
+	}
+
+	vm, err := node.VirtualMachine(ctx, spec.VMID)
+	if err != nil {
+		return fmt.Errorf("get cloned vm %d: %w", spec.VMID, err)
+	}
+
+	// The cloud-init drive needs a storage: the requested one, or the storage the
+	// cloned disk landed on.
+	ciStorage := spec.Disk.Storage
+	if ciStorage == "" {
+		ciStorage = storageOf(vm.VirtualMachineConfig.SCSIs["scsi0"])
+	}
+	opts := []pve.VirtualMachineOption{{Name: "ide2", Value: ciStorage + ":cloudinit"}}
+	if spec.Cores > 0 {
+		opts = append(opts, pve.VirtualMachineOption{Name: "cores", Value: spec.Cores})
+	}
+	if spec.MemoryMB > 0 {
+		opts = append(opts, pve.VirtualMachineOption{Name: "memory", Value: spec.MemoryMB})
+	}
+	if spec.CPU != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "cpu", Value: spec.CPU})
+	}
+	if len(spec.Tags) > 0 {
+		opts = append(opts, pve.VirtualMachineOption{Name: "tags", Value: strings.Join(spec.Tags, ";")})
+	}
+	opts = append(opts, cloudInitOptions(spec.CloudInit)...)
+	if err := c.configWait(ctx, vm, opts...); err != nil {
+		return fmt.Errorf("finish cloned vm %d: %w", spec.VMID, err)
+	}
+
+	if spec.Disk.Size != "" {
+		task, err := vm.ResizeDisk(ctx, "scsi0", spec.Disk.Size)
+		if err != nil {
+			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		}
+		if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
+			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		}
+	}
+	return nil
+}
+
+// storageOf returns the storage name from a Proxmox volume id like
+// "local-lvm:vm-9500-disk-0,size=10G".
+func storageOf(volid string) string {
+	if i := strings.IndexByte(volid, ':'); i > 0 {
+		return volid[:i]
+	}
+	return volid
+}
+
 // waitTask waits for a Proxmox task and turns a failed exit status into an
 // error. The SDK's task.Wait returns nil as soon as the task stops running, even
 // when it failed (e.g. a download 404), so the exit status must be checked or a
@@ -333,6 +392,39 @@ func waitTask(ctx context.Context, task *pve.Task, interval, timeout time.Durati
 		return fmt.Errorf("task %s: %s", task.UPID, status)
 	}
 	return nil
+}
+
+// cloudInitOptions builds the VM config options for a cloud-init block, empty
+// when ci is nil. Shared by the image-build and template-clone paths.
+func cloudInitOptions(ci *GuestCloudInit) []pve.VirtualMachineOption {
+	if ci == nil {
+		return nil
+	}
+	var opts []pve.VirtualMachineOption
+	if ci.User != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ciuser", Value: ci.User})
+	}
+	if ci.Password != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "cipassword", Value: ci.Password})
+	}
+	if len(ci.SSHKeys) > 0 {
+		opts = append(opts, pve.VirtualMachineOption{Name: "sshkeys", Value: pve.EncodeSSHKeys(ci.SSHKeys...)})
+	}
+	if ci.IP != "" {
+		// Proxmox wants key=value ("ip=dhcp"); accept a bare mode like "dhcp".
+		ip := ci.IP
+		if !strings.Contains(ip, "=") {
+			ip = "ip=" + ip
+		}
+		opts = append(opts, pve.VirtualMachineOption{Name: "ipconfig0", Value: ip})
+	}
+	if ci.Nameserver != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "nameserver", Value: ci.Nameserver})
+	}
+	if ci.SearchDomain != "" {
+		opts = append(opts, pve.VirtualMachineOption{Name: "searchdomain", Value: ci.SearchDomain})
+	}
+	return opts
 }
 
 // configWait applies config options and waits for the resulting task.

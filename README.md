@@ -159,6 +159,32 @@ spec:
     - bridge: vmbr0
 ```
 
+A VM cloned from a declared template, with its own cloud-init. `fromTemplate`
+accepts a template name (a full clone) or an object with `linked: true` for a
+copy-on-write clone. It is mutually exclusive with `image`:
+
+```yaml
+apiVersion: proxmops.dev/v1
+kind: VirtualMachine
+metadata:
+  name: app-02
+  node: pve-node1
+spec:
+  vmid: 130
+  fromTemplate: debian-12-tpl     # or { name: debian-12-tpl, linked: true }
+  cores: 2
+  memory: 2048
+  disks:
+    - storage: local-lvm
+      size: 20G                   # grows the cloned disk
+  cloudInit:
+    user: app
+    sshKeys:
+      - ssh-ed25519 AAAA...
+    ip: dhcp
+  state: running
+```
+
 An ISO synced onto a storage, with an optional checksum:
 
 ```yaml
@@ -351,13 +377,13 @@ Done:
 - [x] VM lifecycle: create, update (cores, memory, CPU, state, cloud-init), delete
 - [x] Cloud-init from a cloud image (URL or local volume)
 - [x] Templates: build and convert
+- [x] Clone a VM from a template with per-clone cloud-init
 - [x] Delete from the UI, opt-in prune
 - [x] Per-resource history and a live daemon logs page
 - [x] Resource detail drawer: desired versus observed, history, actions
 
 Next:
 
-- [ ] Clone a VM from a template with per-clone cloud-init
 - [ ] Container (LXC) apply
 - [ ] Guest disk and NIC drift detection and correction
 - [ ] Network and storage reconciliation

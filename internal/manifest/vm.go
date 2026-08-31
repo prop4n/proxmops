@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+
+	"gopkg.in/yaml.v3"
 )
 
 // VirtualMachine is the desired state of a QEMU guest.
@@ -31,7 +33,11 @@ type VirtualMachineSpec struct {
 	// Image, when set, provisions the VM from a cloud image instead of a blank
 	// disk, enabling cloud-init.
 	Image *Image `yaml:"image,omitempty"`
-	// CloudInit configures the cloud-init drive; only meaningful with Image.
+	// FromTemplate, when set, clones an existing Template instead of building
+	// from an image. Mutually exclusive with Image.
+	FromTemplate *FromTemplate `yaml:"fromTemplate,omitempty"`
+	// CloudInit configures the cloud-init drive; meaningful with Image or
+	// FromTemplate.
 	CloudInit *CloudInit `yaml:"cloudInit,omitempty"`
 	// ApplyMode controls how config changes that need a restart (cores, memory)
 	// are applied to a running VM. Empty reports "reboot required" and leaves the
@@ -46,6 +52,30 @@ type Image struct {
 	// ImportStorage is the directory storage (with the "import" content type)
 	// the image is downloaded to. Empty auto-selects one.
 	ImportStorage string `yaml:"importStorage,omitempty"`
+}
+
+// FromTemplate clones an existing Template. It accepts either a scalar template
+// name (a full clone) or a mapping with an optional linked flag.
+type FromTemplate struct {
+	Name string `yaml:"name"`
+	// Linked makes a copy-on-write clone tied to the template. Default is a full,
+	// independent clone.
+	Linked bool `yaml:"linked,omitempty"`
+}
+
+// UnmarshalYAML accepts either a scalar name ("debian-12-tpl") or a mapping
+// ({name: ..., linked: true}).
+func (f *FromTemplate) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		return node.Decode(&f.Name)
+	}
+	type raw FromTemplate
+	var r raw
+	if err := node.Decode(&r); err != nil {
+		return err
+	}
+	*f = FromTemplate(r)
+	return nil
 }
 
 // CloudInit holds the cloud-init settings injected into the VM.
@@ -109,8 +139,14 @@ func (vm VirtualMachine) Validate() error {
 	if vm.Spec.Image != nil && vm.Spec.Image.Source == "" {
 		return fmt.Errorf("spec.image.source is required when image is set")
 	}
-	if vm.Spec.CloudInit != nil && vm.Spec.Image == nil {
-		return fmt.Errorf("spec.cloudInit requires spec.image")
+	if vm.Spec.Image != nil && vm.Spec.FromTemplate != nil {
+		return fmt.Errorf("spec.image and spec.fromTemplate are mutually exclusive")
+	}
+	if vm.Spec.FromTemplate != nil && vm.Spec.FromTemplate.Name == "" {
+		return fmt.Errorf("spec.fromTemplate.name is required")
+	}
+	if vm.Spec.CloudInit != nil && vm.Spec.Image == nil && vm.Spec.FromTemplate == nil {
+		return fmt.Errorf("spec.cloudInit requires spec.image or spec.fromTemplate")
 	}
 	return nil
 }
