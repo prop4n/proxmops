@@ -6,7 +6,9 @@ WORKDIR /ui
 COPY web/ui/package.json web/ui/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY web/ui/ ./
-RUN bun run build
+# Only compile the assets here; type-checking (vue-tsc) is a separate CI gate, so
+# the image build stays independent of vue-tsc's toolchain sensitivity.
+RUN bunx vite build
 
 # Build a static binary with the UI embedded.
 FROM golang:1.26 AS build
