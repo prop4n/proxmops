@@ -28,7 +28,8 @@ const isoContent = "iso"
 // PVE adapts the go-proxmox SDK to the store interfaces. A single value
 // satisfies both GuestStore and IsoStore.
 type PVE struct {
-	api *pve.Client
+	api     *pve.Client
+	cluster config.Cluster
 }
 
 // compile-time checks that PVE implements the store interfaces.
@@ -44,7 +45,7 @@ func New(cluster config.Cluster) *PVE {
 	if cluster.InsecureSkipVerify {
 		opts = append(opts, pve.WithInsecureSkipVerify())
 	}
-	return &PVE{api: pve.NewClient(cluster.Endpoint, opts...)}
+	return &PVE{api: pve.NewClient(cluster.Endpoint, opts...), cluster: cluster}
 }
 
 // Ping verifies the endpoint is reachable and the API token works by fetching
@@ -92,6 +93,7 @@ func (c *PVE) ListGuests(ctx context.Context) ([]Object, error) {
 			if cfg, err := c.vmConfig(ctx, r.Node, int(r.VMID)); err == nil {
 				o.Cores, o.MemoryMB, o.CPU = cfg.cores, cfg.memMB, cfg.cpu
 				o.CIUser, o.IP, o.Nameserver, o.SearchDomain = cfg.ciUser, cfg.ip, cfg.nameserver, cfg.searchDomain
+				o.CidataHash = cfg.cidataHash
 				o.RebootPending = o.Running && (cfg.cores != liveCores || cfg.memMB != liveMemMB)
 			}
 		}
@@ -109,6 +111,7 @@ type vmObservedConfig struct {
 	ip           string
 	nameserver   string
 	searchDomain string
+	cidataHash   string
 }
 
 // vmConfig reads the VM config values proxmops reconciles: cpu/cores/memory and
@@ -127,7 +130,26 @@ func (c *PVE) vmConfig(ctx context.Context, node string, vmid int) (vmObservedCo
 		ip:           cfg.IPConfigs["ipconfig0"],
 		nameserver:   cfg.Nameserver,
 		searchDomain: cfg.Searchdomain,
+		cidataHash:   parseCidataHash(cfg.IDEs["ide0"]),
 	}, nil
+}
+
+// parseCidataHash extracts the content hash from an attached proxmops CIDATA ISO
+// volume (e.g. "local:iso/proxmops-cidata-9100-a1b2c3d4.iso,media=cdrom"), empty
+// when the ide0 drive is not a proxmops cidata ISO.
+func parseCidataHash(ide0 string) string {
+	const prefix = "proxmops-cidata-"
+	i := strings.Index(ide0, prefix)
+	if i < 0 {
+		return ""
+	}
+	rest := ide0[i+len(prefix):] // "9100-a1b2c3d4.iso,media=cdrom"
+	rest, _, _ = strings.Cut(rest, ".iso")
+	_, hash, ok := strings.Cut(rest, "-")
+	if !ok {
+		return ""
+	}
+	return hash
 }
 
 // derefOr returns *p, or def when p is nil or zero.
@@ -153,6 +175,9 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 	// copied from the template and then finished with cloud-init.
 	if spec.Clone != nil {
 		if err := c.cloneFromTemplate(ctx, node, spec); err != nil {
+			return err
+		}
+		if err := c.provisionCidata(ctx, node, spec); err != nil {
 			return err
 		}
 		if spec.Running {
@@ -207,6 +232,9 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 		if err := c.provisionCloudImage(ctx, node, spec); err != nil {
 			return err
 		}
+	}
+	if err := c.provisionCidata(ctx, node, spec); err != nil {
+		return err
 	}
 
 	if spec.Running {
@@ -516,6 +544,12 @@ func (c *PVE) DeleteGuest(ctx context.Context, obj Object) error {
 	if err != nil {
 		return err
 	}
+	// A proxmops-generated cidata ISO is a separate storage volume, not a VM disk,
+	// so it must be removed explicitly or it would outlive the VM.
+	cidataStorage, cidataFile := "", ""
+	if s, f := parseISOVolume(vm.VirtualMachineConfig.IDEs["ide0"]); strings.HasPrefix(f, "proxmops-cidata-") {
+		cidataStorage, cidataFile = s, f
+	}
 	if vm.IsRunning() {
 		if err := c.setPower(ctx, obj.Node, obj.VMID, false); err != nil {
 			return err
@@ -527,6 +561,9 @@ func (c *PVE) DeleteGuest(ctx context.Context, obj Object) error {
 	}
 	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
 		return fmt.Errorf("delete vm %d: %w", obj.VMID, err)
+	}
+	if cidataFile != "" {
+		_ = c.DeleteISO(ctx, obj.Node, cidataStorage, cidataFile)
 	}
 	return nil
 }

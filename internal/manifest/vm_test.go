@@ -89,6 +89,34 @@ func TestVMValidateCloudInitAllowedWithFromTemplate(t *testing.T) {
 	}
 }
 
+func TestVMValidateUserDataAndCloudInitExclusive(t *testing.T) {
+	vm := baseVM()
+	vm.Spec.UserData = "#cloud-config\n"
+	vm.Spec.CloudInit = &CloudInit{User: "x"}
+	vm.Spec.FromTemplate = &FromTemplate{Name: "tpl"}
+	if err := vm.Validate(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("want userData/cloudInit exclusive error, got %v", err)
+	}
+}
+
+func TestVMValidateUserDataAndISOExclusive(t *testing.T) {
+	vm := baseVM()
+	vm.Spec.UserData = "#cloud-config\n"
+	vm.Spec.ISO = "local:iso/seed.iso"
+	if err := vm.Validate(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("want userData/iso exclusive error, got %v", err)
+	}
+}
+
+func TestVMValidateUserDataAlone(t *testing.T) {
+	vm := baseVM()
+	vm.Spec.FromTemplate = &FromTemplate{Name: "tpl"}
+	vm.Spec.UserData = "#cloud-config\n((system-file . \"systems/web01.scm\"))\n"
+	if err := vm.Validate(); err != nil {
+		t.Fatalf("userData alone should be valid, got %v", err)
+	}
+}
+
 func TestImageFilename(t *testing.T) {
 	cases := map[string]string{
 		"https://ex/d/debian-12-genericcloud.qcow2":        "debian-12-genericcloud.qcow2",

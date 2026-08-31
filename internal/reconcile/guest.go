@@ -114,6 +114,39 @@ func (g *guestReconciler) Plan(ctx context.Context, desired []manifest.Resource)
 			})
 			continue
 		}
+		// A changed user-data means a new cidata ISO plus a reboot to re-read it.
+		// The new ISO is only staged when the reboot is authorised, so drift keeps
+		// being reported until applyMode allows it.
+		if vm.Spec.UserData != "" && proxmox.CidataHash(vm.Spec.UserData) != obs.CidataHash {
+			if vm.Spec.ApplyMode == manifest.ApplyModeReboot {
+				spec, specErr := desiredSpec(vm, templateVMIDs)
+				node, id := obs.Node, obs.VMID
+				plan.Actions = append(plan.Actions, Action{
+					Type:   ActionUpdate,
+					Kind:   manifest.KindVirtualMachine,
+					Name:   vm.Metadata.Name,
+					Reason: "user-data changed, reprovisioning and restarting",
+					Apply: func(ctx context.Context) error {
+						if specErr != nil {
+							return specErr
+						}
+						if err := g.store.SyncUserData(ctx, spec); err != nil {
+							return err
+						}
+						return g.store.RebootGuest(ctx, node, id)
+					},
+				})
+			} else {
+				plan.Actions = append(plan.Actions, Action{
+					Type:          ActionUpdate,
+					Kind:          manifest.KindVirtualMachine,
+					Name:          vm.Metadata.Name,
+					Reason:        "user-data changed, reboot required to apply (set applyMode: reboot)",
+					Informational: true,
+				})
+			}
+			continue
+		}
 		// Config already matches desired, but a prior change to a running VM is
 		// waiting on a restart. Reboot when opted in; otherwise just report it.
 		if obs.RebootPending {
@@ -252,6 +285,7 @@ func desiredSpec(vm manifest.VirtualMachine, templateVMIDs map[string]int) (prox
 		MemoryMB: vm.Spec.Memory,
 		CPU:      vm.Spec.CPU,
 		ISO:      vm.Spec.ISO,
+		UserData: vm.Spec.UserData,
 		Running:  vm.Spec.State == manifest.StateRunning,
 		Tags:     tags,
 	}

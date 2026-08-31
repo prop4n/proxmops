@@ -52,6 +52,9 @@ type Object struct {
 	IP           string
 	Nameserver   string
 	SearchDomain string
+	// CidataHash is the content hash parsed from an attached proxmops CIDATA ISO
+	// (ide0), empty when none. Used to detect a user-data change.
+	CidataHash string
 }
 
 // Owned reports whether the object carries the proxmops ownership tag.
@@ -95,6 +98,9 @@ type GuestSpec struct {
 	// Clone, when set, creates the VM by cloning a template instead of building
 	// from an image. Mutually exclusive with Image.
 	Clone *GuestClone
+	// UserData, when set, is a raw NoCloud user-data payload delivered as a
+	// generated CIDATA seed ISO attached as a cdrom.
+	UserData string
 }
 
 // GuestClone identifies the template to clone and the clone mode.
@@ -152,6 +158,8 @@ type GuestStore interface {
 	RebootGuest(ctx context.Context, node string, vmid int) error
 	// ConvertToTemplate turns a built VM into a template (idempotent).
 	ConvertToTemplate(ctx context.Context, node string, vmid int) error
+	// SyncUserData re-provisions a VM's cidata ISO to match new user-data.
+	SyncUserData(ctx context.Context, spec GuestSpec) error
 }
 
 // IsoDownload describes an ISO to fetch onto a storage.
