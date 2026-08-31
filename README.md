@@ -185,6 +185,24 @@ spec:
   state: running
 ```
 
+A VM given arbitrary cloud-init user-data. Proxmox's native options cannot carry
+raw user-data, so proxmops generates a NoCloud `CIDATA` seed ISO from `userData`,
+uploads it, and attaches it as a cdrom. Any NoCloud consumer (cloud-init,
+guix-metadata, ...) reads it at boot. `userData` is mutually exclusive with
+`cloudInit` and `iso` (all three drive the cidata disk / ide0). A change to
+`userData` re-provisions the ISO, and reboots the VM to re-read it when it is
+running and `applyMode: reboot` is set:
+
+```yaml
+spec:
+  fromTemplate: guix-homelab-template
+  userData: |
+    #cloud-config
+    ((system-file . "systems/web01.scm"))
+  applyMode: reboot
+  state: running
+```
+
 An ISO synced onto a storage, with an optional checksum:
 
 ```yaml
