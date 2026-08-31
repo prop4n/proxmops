@@ -188,6 +188,9 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 			Value: fmt.Sprintf("%s,bridge=%s", model, spec.NIC.Bridge),
 		})
 	}
+	if opt, ok := isoCdromOption(spec.ISO); ok {
+		opts = append(opts, opt)
+	}
 	if len(spec.Tags) > 0 {
 		opts = append(opts, pve.VirtualMachineOption{Name: "tags", Value: strings.Join(spec.Tags, ";")})
 	}
@@ -256,8 +259,13 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 		{Name: "vga", Value: "serial0"},
 		{Name: "ostype", Value: "l26"},
 	}
-	if !spec.AsTemplate {
+	// The Proxmox cloud-init drive is added only when cloud-init is requested, so
+	// it never conflicts with a user-supplied cidata ISO (both label cidata).
+	if !spec.AsTemplate && spec.CloudInit != nil {
 		opts = append(opts, pve.VirtualMachineOption{Name: "ide2", Value: spec.Disk.Storage + ":cloudinit"})
+	}
+	if opt, ok := isoCdromOption(spec.ISO); ok {
+		opts = append(opts, opt)
 	}
 	opts = append(opts, cloudInitOptions(spec.CloudInit)...)
 	if err := c.configWait(ctx, vm, opts...); err != nil {
@@ -337,7 +345,15 @@ func (c *PVE) cloneFromTemplate(ctx context.Context, node *pve.Node, spec GuestS
 	if ciStorage == "" {
 		ciStorage = storageOf(vm.VirtualMachineConfig.SCSIs["scsi0"])
 	}
-	opts := []pve.VirtualMachineOption{{Name: "ide2", Value: ciStorage + ":cloudinit"}}
+	// The Proxmox cloud-init drive is added only when cloud-init is requested, so
+	// it never conflicts with a user-supplied cidata ISO (both label cidata).
+	var opts []pve.VirtualMachineOption
+	if spec.CloudInit != nil {
+		opts = append(opts, pve.VirtualMachineOption{Name: "ide2", Value: ciStorage + ":cloudinit"})
+	}
+	if opt, ok := isoCdromOption(spec.ISO); ok {
+		opts = append(opts, opt)
+	}
 	if spec.Cores > 0 {
 		opts = append(opts, pve.VirtualMachineOption{Name: "cores", Value: spec.Cores})
 	}
@@ -392,6 +408,16 @@ func waitTask(ctx context.Context, task *pve.Task, interval, timeout time.Durati
 		return fmt.Errorf("task %s: %s", task.UPID, status)
 	}
 	return nil
+}
+
+// isoCdromOption attaches an ISO volume as a cdrom drive on ide0. The value is a
+// Proxmox volume reference (e.g. "local:iso/seed.iso"). Returns false when no ISO
+// is set. ide2 is reserved for the cloud-init drive.
+func isoCdromOption(iso string) (pve.VirtualMachineOption, bool) {
+	if iso == "" {
+		return pve.VirtualMachineOption{}, false
+	}
+	return pve.VirtualMachineOption{Name: "ide0", Value: iso + ",media=cdrom"}, true
 }
 
 // cloudInitOptions builds the VM config options for a cloud-init block, empty

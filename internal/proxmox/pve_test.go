@@ -23,6 +23,16 @@ func TestParseTags(t *testing.T) {
 	}
 }
 
+func TestIsoCdromOption(t *testing.T) {
+	if _, ok := isoCdromOption(""); ok {
+		t.Error("empty iso should not produce an option")
+	}
+	opt, ok := isoCdromOption("local:iso/seed.iso")
+	if !ok || opt.Name != "ide0" || opt.Value != "local:iso/seed.iso,media=cdrom" {
+		t.Fatalf("got %+v, %v; want ide0=local:iso/seed.iso,media=cdrom", opt, ok)
+	}
+}
+
 func TestKindFromType(t *testing.T) {
 	tests := []struct {
 		in    string
