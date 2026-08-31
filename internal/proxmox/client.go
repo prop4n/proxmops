@@ -66,6 +66,9 @@ func (o Object) Owned() bool {
 type GuestDisk struct {
 	Storage string
 	Size    string
+	// Bus is "scsi" (default) or "virtio", selecting the controller and thus the
+	// guest device (/dev/sda vs /dev/vda).
+	Bus string
 }
 
 // GuestNIC is a VM's primary network interface.

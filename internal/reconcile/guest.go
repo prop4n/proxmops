@@ -299,7 +299,7 @@ func desiredSpec(vm manifest.VirtualMachine, templateVMIDs map[string]int) (prox
 		Tags:     tags,
 	}
 	if len(vm.Spec.Disks) > 0 {
-		spec.Disk = proxmox.GuestDisk{Storage: vm.Spec.Disks[0].Storage, Size: vm.Spec.Disks[0].Size}
+		spec.Disk = proxmox.GuestDisk{Storage: vm.Spec.Disks[0].Storage, Size: vm.Spec.Disks[0].Size, Bus: vm.Spec.Disks[0].Bus}
 	}
 	if len(vm.Spec.Net) > 0 {
 		spec.NIC = proxmox.GuestNIC{Bridge: vm.Spec.Net[0].Bridge, Model: vm.Spec.Net[0].Model}

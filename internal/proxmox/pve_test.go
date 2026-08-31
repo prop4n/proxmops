@@ -33,6 +33,17 @@ func TestIsoCdromOption(t *testing.T) {
 	}
 }
 
+func TestDiskSlot(t *testing.T) {
+	if diskSlot("virtio") != "virtio0" {
+		t.Errorf("virtio -> %q, want virtio0", diskSlot("virtio"))
+	}
+	for _, b := range []string{"", "scsi", "anything"} {
+		if diskSlot(b) != "scsi0" {
+			t.Errorf("diskSlot(%q) = %q, want scsi0", b, diskSlot(b))
+		}
+	}
+}
+
 func TestKindFromType(t *testing.T) {
 	tests := []struct {
 		in    string
