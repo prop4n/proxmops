@@ -107,6 +107,9 @@ const ApplyModeReboot ApplyMode = "reboot"
 type Disk struct {
 	Storage string `yaml:"storage"`
 	Size    string `yaml:"size"`
+	// Bus selects the disk controller: "scsi" (default, guest /dev/sda) or
+	// "virtio" (guest /dev/vda). Match the image's expected device.
+	Bus string `yaml:"bus,omitempty"`
 }
 
 // NIC is a virtual network interface. IP and GW apply to containers, whose
@@ -162,7 +165,22 @@ func (vm VirtualMachine) Validate() error {
 	if vm.Spec.UserData != "" && vm.Spec.ISO != "" {
 		return fmt.Errorf("spec.userData and spec.iso are mutually exclusive")
 	}
+	for _, d := range vm.Spec.Disks {
+		if err := validateBus(d.Bus); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// validateBus reports whether a disk bus value is supported.
+func validateBus(bus string) error {
+	switch bus {
+	case "", "scsi", "virtio":
+		return nil
+	default:
+		return fmt.Errorf("spec.disks[].bus %q is not supported (use scsi or virtio)", bus)
+	}
 }
 
 // Filename derives the storage filename from the image source URL, ignoring any

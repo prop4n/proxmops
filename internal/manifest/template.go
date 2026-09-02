@@ -44,5 +44,10 @@ func (t Template) Validate() error {
 	if t.Spec.Image == nil || t.Spec.Image.Source == "" {
 		return fmt.Errorf("spec.image.source is required for a Template")
 	}
+	for _, d := range t.Spec.Disks {
+		if err := validateBus(d.Bus); err != nil {
+			return err
+		}
+	}
 	return nil
 }

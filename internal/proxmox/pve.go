@@ -199,7 +199,7 @@ func (c *PVE) CreateGuest(ctx context.Context, spec GuestSpec) error {
 	// create (it needs the VM to exist first).
 	if spec.Image == nil && spec.Disk.Storage != "" {
 		opts = append(opts, pve.VirtualMachineOption{
-			Name:  "scsi0",
+			Name:  diskSlot(spec.Disk.Bus),
 			Value: fmt.Sprintf("%s:%d", spec.Disk.Storage, parseSizeGB(spec.Disk.Size)),
 		})
 	}
@@ -272,9 +272,10 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 		return fmt.Errorf("get vm %d: %w", spec.VMID, err)
 	}
 
-	// Import the image as scsi0.
+	// Import the image onto the primary disk slot (scsi0 or virtio0).
+	slot := diskSlot(spec.Disk.Bus)
 	importFrom := fmt.Sprintf("%s:0,import-from=%s", spec.Disk.Storage, importVolume)
-	if err := c.configWait(ctx, vm, pve.VirtualMachineOption{Name: "scsi0", Value: importFrom}); err != nil {
+	if err := c.configWait(ctx, vm, pve.VirtualMachineOption{Name: slot, Value: importFrom}); err != nil {
 		return fmt.Errorf("import disk for vm %d: %w", spec.VMID, err)
 	}
 
@@ -282,7 +283,7 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 	// serial device is required or init dies early; ostype l26 sets the right
 	// Linux defaults. A template is bare: no cloud-init drive.
 	opts := []pve.VirtualMachineOption{
-		{Name: "boot", Value: "order=scsi0"},
+		{Name: "boot", Value: "order=" + slot},
 		{Name: "serial0", Value: "socket"},
 		{Name: "vga", Value: "serial0"},
 		{Name: "ostype", Value: "l26"},
@@ -303,12 +304,8 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 	// Grow the imported disk if a larger size is requested. Proxmox refuses to
 	// shrink, so a smaller value surfaces as an error rather than data loss.
 	if spec.Disk.Size != "" {
-		task, err := vm.ResizeDisk(ctx, "scsi0", spec.Disk.Size)
-		if err != nil {
-			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
-		}
-		if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
-			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		if err := c.resizeDisk(ctx, vm, spec.VMID, slot, spec.Disk.Size); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -318,6 +315,25 @@ func (c *PVE) provisionCloudImage(ctx context.Context, node *pve.Node, spec Gues
 // (e.g. "local:import/debian.qcow2") rather than a URL to download.
 func isVolumeRef(source string) bool {
 	return !strings.Contains(source, "://")
+}
+
+// diskSlot returns the Proxmox config key for the primary disk given a bus:
+// "virtio0" for virtio-blk (guest /dev/vda), otherwise "scsi0" (guest /dev/sda).
+func diskSlot(bus string) string {
+	if bus == "virtio" {
+		return "virtio0"
+	}
+	return "scsi0"
+}
+
+// diskSlotOf returns the primary disk slot present in a VM config, so a cloned
+// VM's slot is discovered rather than assumed (a clone inherits the template's
+// bus). Prefers virtio0, falls back to scsi0.
+func diskSlotOf(cfg *pve.VirtualMachineConfig) string {
+	if cfg != nil && cfg.VirtIOs["virtio0"] != "" {
+		return "virtio0"
+	}
+	return "scsi0"
 }
 
 // ConvertToTemplate turns a built VM into a template. It is idempotent: a VM
@@ -367,11 +383,14 @@ func (c *PVE) cloneFromTemplate(ctx context.Context, node *pve.Node, spec GuestS
 		return fmt.Errorf("get cloned vm %d: %w", spec.VMID, err)
 	}
 
+	// The cloned disk keeps the template's bus, so discover the slot rather than
+	// assume scsi0.
+	slot := diskSlotOf(vm.VirtualMachineConfig)
 	// The cloud-init drive needs a storage: the requested one, or the storage the
 	// cloned disk landed on.
 	ciStorage := spec.Disk.Storage
 	if ciStorage == "" {
-		ciStorage = storageOf(vm.VirtualMachineConfig.SCSIs["scsi0"])
+		ciStorage = storageOf(vm.VirtualMachineConfig.VirtIOs[slot] + vm.VirtualMachineConfig.SCSIs[slot])
 	}
 	// The Proxmox cloud-init drive is added only when cloud-init is requested, so
 	// it never conflicts with a user-supplied cidata ISO (both label cidata).
@@ -400,15 +419,38 @@ func (c *PVE) cloneFromTemplate(ctx context.Context, node *pve.Node, spec GuestS
 	}
 
 	if spec.Disk.Size != "" {
-		task, err := vm.ResizeDisk(ctx, "scsi0", spec.Disk.Size)
-		if err != nil {
-			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
-		}
-		if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
-			return fmt.Errorf("resize disk for vm %d: %w", spec.VMID, err)
+		if err := c.resizeDisk(ctx, vm, spec.VMID, slot, spec.Disk.Size); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// resizeDisk grows the given disk slot to size. spec.size means "at least this
+// large": when the disk already meets or exceeds it (e.g. an image already that
+// size, rounded up by the storage), Proxmox rejects the shrink and that is
+// treated as done rather than an error.
+func (c *PVE) resizeDisk(ctx context.Context, vm *pve.VirtualMachine, vmid int, slot, size string) error {
+	task, err := vm.ResizeDisk(ctx, slot, size)
+	if err != nil {
+		if isShrinkError(err) {
+			return nil
+		}
+		return fmt.Errorf("resize disk for vm %d: %w", vmid, err)
+	}
+	if err := waitTask(ctx, task, time.Second, guestTimeout); err != nil {
+		if isShrinkError(err) {
+			return nil
+		}
+		return fmt.Errorf("resize disk for vm %d: %w", vmid, err)
+	}
+	return nil
+}
+
+// isShrinkError reports whether an error is Proxmox refusing to shrink a disk,
+// which for our "at least this size" intent means the disk is already big enough.
+func isShrinkError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "shrink")
 }
 
 // storageOf returns the storage name from a Proxmox volume id like

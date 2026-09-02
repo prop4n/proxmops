@@ -118,7 +118,7 @@ func templateSpec(tpl manifest.Template) proxmox.GuestSpec {
 		}
 	}
 	if len(tpl.Spec.Disks) > 0 {
-		spec.Disk = proxmox.GuestDisk{Storage: tpl.Spec.Disks[0].Storage, Size: tpl.Spec.Disks[0].Size}
+		spec.Disk = proxmox.GuestDisk{Storage: tpl.Spec.Disks[0].Storage, Size: tpl.Spec.Disks[0].Size, Bus: tpl.Spec.Disks[0].Bus}
 	}
 	if len(tpl.Spec.Net) > 0 {
 		spec.NIC = proxmox.GuestNIC{Bridge: tpl.Spec.Net[0].Bridge, Model: tpl.Spec.Net[0].Model}

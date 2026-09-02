@@ -27,6 +27,19 @@ func ownedTemplate(name string, vmid int) proxmox.Object {
 	}
 }
 
+func TestTemplateCarriesDiskBus(t *testing.T) {
+	store := &fakeGuestStore{}
+	tpl := tplResource("deb", 9000)
+	tpl.Spec.Disks = []manifest.Disk{{Storage: "local-lvm", Size: "10G", Bus: "virtio"}}
+	plan, _ := NewTemplateReconciler(store).Plan(context.Background(), []manifest.Resource{tpl})
+	if err := plan.Actions[0].Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.created[0].Disk.Bus != "virtio" {
+		t.Fatalf("disk bus not propagated: %q", store.created[0].Disk.Bus)
+	}
+}
+
 func TestTemplateBuildsAndConverts(t *testing.T) {
 	store := &fakeGuestStore{}
 	plan, err := NewTemplateReconciler(store).Plan(context.Background(), []manifest.Resource{tplResource("deb", 9000)})
